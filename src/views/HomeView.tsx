@@ -247,13 +247,20 @@ export const HomeView: React.FC<HomeViewProps> = ({
                 </div>
 
                 {/* Vernacular Dialects Indicator */}
-                <div className="flex items-center gap-1.5 pt-0.5">
+                <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                   <span className="font-mono text-[10px] text-on-surface-variant uppercase">
                     {t.voiceSupportedIn}
+                  </span>
+                  <span className="px-2 py-0.5 rounded-md bg-primary-fixed/30 text-primary text-[10px] font-bold">
+                    22 Languages
                   </span>
                   {[
                     { code: 'kn' as const, label: 'ಕನ್ನಡ' },
                     { code: 'hi' as const, label: 'हिंदी' },
+                    { code: 'ta' as const, label: 'தமிழ்' },
+                    { code: 'te' as const, label: 'తెలుగు' },
+                    { code: 'bn' as const, label: 'বাংলা' },
+                    { code: 'mr' as const, label: 'मराठी' },
                     { code: 'en' as const, label: 'English' },
                   ].map((tag) => (
                     <button
@@ -262,7 +269,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
                       onClick={() => setLanguage(tag.code)}
                       className={`px-2 py-0.5 rounded text-[10px] font-semibold cursor-pointer transition-colors ${
                         language === tag.code
-                          ? 'bg-primary text-on-primary font-bold'
+                          ? 'bg-primary text-on-primary font-bold shadow-xs'
                           : 'bg-surface-container-high text-on-surface hover:bg-surface-container'
                       }`}
                     >
@@ -1118,7 +1125,7 @@ export const HomeView: React.FC<HomeViewProps> = ({
             </div>
             <div className="flex flex-col text-left">
               <span className="text-xs font-bold leading-none">{t.voiceAssistant}</span>
-              <span className="text-[10px] text-primary-fixed font-medium">ಸಹಾಯವಾಣಿ • बोलिए</span>
+              <span className="text-[10px] text-primary-fixed font-medium">22 Languages • Speak / Type</span>
             </div>
           </button>
         </div>

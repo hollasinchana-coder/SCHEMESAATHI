@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useLanguage } from '../i18n/LanguageContext';
-import { CitizenProfile } from '../types';
+import { ALL_SUPPORTED_LANGUAGES, useLanguage } from '../i18n/LanguageContext';
+import { getLanguageOption } from '../i18n/languages';
+import { findBestVoiceForLanguage, cleanForTTS } from '../utils/voiceEligibilityReader';
+import { CitizenProfile, Language } from '../types';
 
 interface VoiceAssistantModalProps {
   isOpen: boolean;
@@ -10,33 +12,54 @@ interface VoiceAssistantModalProps {
   onVoiceResult?: (text: string, profileHints?: Record<string, unknown>) => void;
 }
 
-// Convert Kannada and Hindi digits to English numbers
+// Convert all Indic numeral scripts to standard Arabic numerals
 function normalizeIndicDigits(str: string): string {
   const indicMap: Record<string, string> = {
+    // Kannada
     '೦': '0', '೧': '1', '೨': '2', '೩': '3', '೪': '4', '೫': '5', '೬': '6', '೭': '7', '೮': '8', '೯': '9',
+    // Devanagari (Hindi, Marathi, Nepali, Sanskrit, Maithili, Bodo, Dogri, Konkani)
     '०': '0', '१': '1', '२': '2', '३': '3', '४': '4', '५': '5', '६': '6', '७': '7', '८': '8', '९': '9',
+    // Bengali / Assamese
+    '০': '0', '১': '1', '২': '2', '৩': '3', '৪': '4', '৫': '5', '৬': '6', '৭': '7', '৮': '8', '৯': '9',
+    // Gujarati
+    '૦': '0', '૧': '1', '૨': '2', '૩': '3', '૪': '4', '૫': '5', '૬': '6', '૭': '7', '૮': '8', '૯': '9',
+    // Gurmukhi (Punjabi)
+    '੦': '0', '੧': '1', '੨': '2', '੩': '3', '੪': '4', '੫': '5', '੬': '6', '੭': '7', '੮': '8', '੯': '9',
+    // Odia
+    '୦': '0', '୧': '1', '୨': '2', '୩': '3', '୪': '4', '୫': '5', '୬': '6', '୭': '7', '୮': '8', '୯': '9',
+    // Tamil
+    '௦': '0', '௧': '1', '௨': '2', '௩': '3', '௪': '4', '௫': '5', '௬': '6', '௭': '7', '௮': '8', '௯': '9',
+    // Telugu
+    '౦': '0', '౧': '1', '౨': '2', '౩': '3', '౪': '4', '౫': '5', '౬': '6', '౭': '7', '౮': '8', '౯': '9',
+    // Malayalam
+    '൦': '0', '൧': '1', '൨': '2', '൩': '3', '൪': '4', '൫': '5', '൬': '6', '൭': '7', '൮': '8', '൯': '9',
   };
-  return str.replace(/[೦-೯०-९]/g, (m) => indicMap[m] || m);
+  return str.replace(/[೦-೯०-९০-৯૦-૯੦-੯୦-୯௦-௯౦-౯൦-൯]/g, (m) => indicMap[m] || m);
 }
 
-// Intelligent extractor for Indic & English speech/text
+// Intelligent extractor across 22 Scheduled Indian Languages & English
 function extractCitizenDetails(rawText: string, defaultProfile?: CitizenProfile): Partial<CitizenProfile> {
   const text = normalizeIndicDigits(rawText);
   const lower = text.toLowerCase();
   const extracted: Partial<CitizenProfile> = {};
 
-  // 1. Extract Occupation
+  // 1. Extract Occupation across languages
   if (
     lower.includes('farmer') ||
     lower.includes('kisan') ||
     lower.includes('agriculture') ||
     lower.includes('cultiv') ||
-    text.includes('ರೈತ') ||
-    text.includes('ಕೃಷಿ') ||
-    text.includes('ಬೆಳೆ') ||
-    text.includes('किसान') ||
-    text.includes('खेती') ||
-    text.includes('कृषि')
+    text.includes('ರೈತ') || text.includes('ಕೃಷಿ') || text.includes('ಬೆಳೆ') ||
+    text.includes('किसान') || text.includes('खेती') || text.includes('कृषि') ||
+    text.includes('விவசாயி') || text.includes('விவசாயம்') ||
+    text.includes('రైతు') || text.includes('వ్యవసాయం') ||
+    text.includes('കർഷകൻ') || text.includes('കൃഷി') ||
+    text.includes('কৃষক') || text.includes('কৃষি') ||
+    text.includes('शेतकरी') || text.includes('शेती') ||
+    text.includes('ખેડૂત') || text.includes('ખેતી') ||
+    text.includes('କୃଷକ') || text.includes('ଚାଷୀ') ||
+    text.includes('ਕਿਸਾਨ') || text.includes('ਖੇਤੀ') ||
+    text.includes('کسان') || text.includes('کاشتکار')
   ) {
     extracted.occupation = 'Farmer / Agriculture';
   } else if (
@@ -44,12 +67,17 @@ function extractCitizenDetails(rawText: string, defaultProfile?: CitizenProfile)
     lower.includes('scholarship') ||
     lower.includes('study') ||
     lower.includes('college') ||
-    text.includes('ವಿದ್ಯಾರ್ಥಿ') ||
-    text.includes('ಓದು') ||
-    text.includes('ವಿದ್ಯಾರ್ಥಿವೇತನ') ||
-    text.includes('छात्र') ||
+    text.includes('ವಿದ್ಯಾರ್ಥಿ') || text.includes('ಓದು') || text.includes('ವಿದ್ಯಾರ್ಥಿವೇತನ') ||
+    text.includes('छात्र') || text.includes('विद्यार्थी') || text.includes('पढ़ाई') ||
+    text.includes('மாணவர்') || text.includes('படிப்பு') ||
+    text.includes('విద్యార్థి') || text.includes('చదువు') ||
+    text.includes('വിദ്യാർത്ഥി') ||
+    text.includes('ছাত্র') || text.includes('পড়াশোনা') ||
     text.includes('विद्यार्थी') ||
-    text.includes('पढ़ाई')
+    text.includes('વિદ્યાર્થી') ||
+    text.includes('ଛାତ୍ର') ||
+    text.includes('ਵਿਦਿਆਰਥੀ') ||
+    text.includes('طالب علم')
   ) {
     extracted.occupation = 'Student';
     extracted.isStudentEnrolled = true;
@@ -58,12 +86,16 @@ function extractCitizenDetails(rawText: string, defaultProfile?: CitizenProfile)
     lower.includes('construction') ||
     lower.includes('labour') ||
     lower.includes('worker') ||
-    text.includes('ದಿನಗೂಲಿ') ||
-    text.includes('ಕಾರ್ಮಿಕ') ||
-    text.includes('ಕೂಲಿ') ||
-    text.includes('मजदूर') ||
-    text.includes('दिहाड़ी') ||
-    text.includes('श्रमिक')
+    text.includes('ದಿನಗೂಲಿ') || text.includes('ಕಾರ್ಮಿಕ') || text.includes('ಕೂಲಿ') ||
+    text.includes('मजदूर') || text.includes('दिहाड़ी') || text.includes('श्रमिक') ||
+    text.includes('கூலி') || text.includes('தொழிலாளி') ||
+    text.includes('కూలీ') || text.includes('కార్మికుడు') ||
+    text.includes('തൊഴിലാളി') ||
+    text.includes('শ্রমিক') || text.includes('দিনমজুর') ||
+    text.includes('मजूर') || text.includes('कामगार') ||
+    text.includes('મજૂર') || text.includes('શ્રમિક') ||
+    text.includes('ਮਜ਼ਦੂਰ') ||
+    text.includes('مزدور')
   ) {
     extracted.occupation = 'Daily Wage / Construction Worker';
   } else if (
@@ -71,13 +103,14 @@ function extractCitizenDetails(rawText: string, defaultProfile?: CitizenProfile)
     lower.includes('business') ||
     lower.includes('shop') ||
     lower.includes('self-employed') ||
-    text.includes('ಕುಶಲಕರ್ಮಿ') ||
-    text.includes('ವ್ಯಾಪಾರ') ||
-    text.includes('ಅಂಗಡಿ') ||
-    text.includes('ಸ್ವಯಂ ಉದ್ಯೋಗ') ||
-    text.includes('कारीगर') ||
-    text.includes('दुकानदार') ||
-    text.includes('स्वरोजगार')
+    text.includes('ಕುಶಲಕರ್ಮಿ') || text.includes('ವ್ಯಾಪಾರ') || text.includes('ಅಂಗಡಿ') || text.includes('ಸ್ವಯಂ ಉದ್ಯೋಗ') ||
+    text.includes('कारीगर') || text.includes('दुकानदार') || text.includes('स्वरोजगार') ||
+    text.includes('கைவினைஞர்') || text.includes('வணிகம்') ||
+    text.includes('చేతివృత్తి') || text.includes('వ్యాపారం') ||
+    text.includes('കരകൗശല') ||
+    text.includes('কারিগর') || text.includes('ব্যবসা') ||
+    text.includes('कारागीर') || text.includes('दुकान') ||
+    text.includes('કારીગર') || text.includes('વેપાર')
   ) {
     extracted.occupation = 'Self-employed / Artisan';
   } else if (
@@ -85,21 +118,25 @@ function extractCitizenDetails(rawText: string, defaultProfile?: CitizenProfile)
     lower.includes('women') ||
     lower.includes('homemaker') ||
     lower.includes('shg') ||
-    text.includes('ಮಹಿಳೆ') ||
-    text.includes('ಗೃಹಿಣಿ') ||
-    text.includes('ಸ್ವಸಹಾಯ') ||
-    text.includes('महिला') ||
-    text.includes('गृहिणी') ||
-    text.includes('एसएचजी')
+    text.includes('ಮಹಿಳೆ') || text.includes('ಗೃಹಿಣಿ') || text.includes('ಸ್ವಸಹಾಯ') ||
+    text.includes('महिला') || text.includes('गृहिणी') || text.includes('एसएचजी') ||
+    text.includes('பெண்') || text.includes('குடும்பத்தலைவி') ||
+    text.includes('మహిళ') || text.includes('గృహిణి') ||
+    text.includes('സ്ത്രീ') || text.includes('ഗൃഹനാഥ') ||
+    text.includes('মহিলা') || text.includes('গৃহিণী') ||
+    text.includes('महिला') || text.includes('गृहिणी') ||
+    text.includes('મહિલા') || text.includes('ગૃહિણી') ||
+    text.includes('ਔਰਤ') ||
+    text.includes('خاتون') || text.includes('عورت')
   ) {
     extracted.occupation = 'Homemaker / Women';
     extracted.gender = 'Female';
   }
 
-  // 2. Extract Age
+  // 2. Extract Age across scripts
   const ageMatch =
-    text.match(/(\d{1,2})\s*(years|yr|ವರ್ಷ|ವರ್ಷದ|साल|वर्ष|आयु)/i) ||
-    text.match(/(age|ವಯಸ್ಸು|आयु)\s*(is|ಆಗಿದೆ|:)?\s*(\d{1,2})/i);
+    text.match(/(\d{1,2})\s*(years|yr|ವರ್ಷ|ವರ್ಷದ|साल|वर्ष|आयु|வயது|வருடம்|సంవత్సరాలు|ఏళ్ళు|വയസ്സ്|বছর|বয়স|વર્ષ|ਉਮਰ|سال|عمر)/i) ||
+    text.match(/(age|ವಯಸ್ಸು|आयु|வயது|వయస్సు|വയസ്സ്|বয়স|ਉਮਰ|عمر)\s*(is|ಆಗಿದೆ|:|है|உள்ளது|ఉంది)?\s*(\d{1,2})/i);
   if (ageMatch) {
     const parsedAge = parseInt(ageMatch[1] || ageMatch[3], 10);
     if (parsedAge >= 5 && parsedAge <= 100) {
@@ -107,8 +144,8 @@ function extractCitizenDetails(rawText: string, defaultProfile?: CitizenProfile)
     }
   }
 
-  // 3. Extract Land Holding (Acres)
-  const landMatch = text.match(/(\d+(\.\d+)?)\s*(acres|acre|ಎಕರೆ|ಏಕರೆ|एकड़)/i);
+  // 3. Extract Land Holding (Acres) across scripts
+  const landMatch = text.match(/(\d+(\.\d+)?)\s*(acres|acre|ಎಕರೆ|ಏಕರೆ|एकड़|ஏக்கர்|ఎకరాలు|ఎకరం|ഏക്കർ|একর|एकर|એકર|ਏਕੜ|ایکڑ)/i);
   if (landMatch) {
     const acres = parseFloat(landMatch[1]);
     if (!isNaN(acres) && acres > 0) {
@@ -117,23 +154,24 @@ function extractCitizenDetails(rawText: string, defaultProfile?: CitizenProfile)
   } else if (
     lower.includes('no land') ||
     lower.includes('landless') ||
-    text.includes('ಜಮೀನು ಇಲ್ಲ') ||
-    text.includes('ಭೂಮಿ ಇಲ್ಲ') ||
-    text.includes('जमीन नहीं') ||
-    text.includes('भूमिहीन')
+    text.includes('ಜಮೀನು ಇಲ್ಲ') || text.includes('ಭೂಮಿ ಇಲ್ಲ') ||
+    text.includes('जमीन नहीं') || text.includes('भूमिहीन') ||
+    text.includes('நிலம் இல்லை') || text.includes('భూమి లేదు') ||
+    text.includes('ഭൂമിയില്ല') || text.includes('জমি নেই') ||
+    text.includes('जमीन नाही') || text.includes('જમીન નથી')
   ) {
     extracted.landHoldingAcres = 0;
   }
 
-  // 4. Extract Income
-  const lakhMatch = text.match(/(\d+(\.\d+)?)\s*(lakh|lakhs|ಲಕ್ಷ|ಲಾಖ್|लाख)/i);
+  // 4. Extract Income across scripts
+  const lakhMatch = text.match(/(\d+(\.\d+)?)\s*(lakh|lakhs|ಲಕ್ಷ|ಲಾಖ್|लाख|லட்சம்|లక్షలు|ലക്ഷം|লাখ|લાખ|ਲੱਖ|لاکھ)/i);
   if (lakhMatch) {
     const factor = parseFloat(lakhMatch[1]);
     if (!isNaN(factor)) {
       extracted.annualIncome = Math.round(factor * 100000);
     }
   } else {
-    const rawNumberMatch = text.match(/(₹|rs\.?|inr|ಆದಾಯ|आय)?\s*(\d{5,7})/i);
+    const rawNumberMatch = text.match(/(₹|rs\.?|inr|ಆದಾಯ|आय|வருமானம்|ఆదాయం|வருமானம்|আয়|આવક|ਆਮਦਨ|آمدنی)?\s*(\d{5,7})/i);
     if (rawNumberMatch && rawNumberMatch[2]) {
       const inc = parseInt(rawNumberMatch[2], 10);
       if (inc >= 10000 && inc <= 2500000) {
@@ -142,29 +180,49 @@ function extractCitizenDetails(rawText: string, defaultProfile?: CitizenProfile)
     }
   }
 
-  // 5. Extract State
-  if (lower.includes('karnataka') || text.includes('ಕರ್ನಾಟಕ') || text.includes('कर्नाटक')) {
+  // 5. Extract State across major languages
+  if (lower.includes('karnataka') || text.includes('ಕರ್ನಾಟಕ') || text.includes('कर्नाटक') || text.includes('கர்நாடகா') || text.includes('కర్ణాటక')) {
     extracted.state = 'Karnataka';
-  } else if (lower.includes('uttar pradesh') || lower.includes('u.p') || text.includes('ಉತ್ತರ ಪ್ರದೇಶ') || text.includes('उत्तर प्रदेश')) {
+  } else if (lower.includes('uttar pradesh') || lower.includes('u.p') || text.includes('ಉತ್ತರ ಪ್ರದೇಶ') || text.includes('उत्तर प्रदेश') || text.includes('உத்தரப் பிரதேசம்')) {
     extracted.state = 'Uttar Pradesh';
-  } else if (lower.includes('maharashtra') || text.includes('ಮಹಾರಾಷ್ಟ್ರ') || text.includes('महाराष्ट्र')) {
+  } else if (lower.includes('maharashtra') || text.includes('ಮಹಾರಾಷ್ಟ್ರ') || text.includes('महाराष्ट्र') || text.includes('மகாராஷ்டிரா')) {
     extracted.state = 'Maharashtra';
-  } else if (lower.includes('bihar') || text.includes('ಬಿಹಾರ') || text.includes('बिहार')) {
+  } else if (lower.includes('bihar') || text.includes('ಬಿಹಾರ') || text.includes('बिहार') || text.includes('பீகார்')) {
     extracted.state = 'Bihar';
-  } else if (lower.includes('tamil nadu') || text.includes('ತಮಿಳುನಾಡು') || text.includes('तमिलनाडु')) {
+  } else if (lower.includes('tamil nadu') || text.includes('ತಮಿಳುನಾಡು') || text.includes('तमिलनाडु') || text.includes('தமிழ்நாடு')) {
     extracted.state = 'Tamil Nadu';
+  } else if (lower.includes('telangana') || text.includes('ತೆಲಂಗಾಣ') || text.includes('तेलंगाना') || text.includes('తెలంగాణ')) {
+    extracted.state = 'Telangana';
+  } else if (lower.includes('west bengal') || text.includes('ಪಶ್ಚಿಮ ಬಂಗಾಳ') || text.includes('पश्चिम बंगाल') || text.includes('পশ্চিমবঙ্গ')) {
+    extracted.state = 'West Bengal';
+  } else if (lower.includes('kerala') || text.includes('ಕೇರಳ') || text.includes('केरल') || text.includes('கேரளா') || text.includes('കേരളം')) {
+    extracted.state = 'Kerala';
+  } else if (lower.includes('punjab') || text.includes('ಪಂಜಾಬ್') || text.includes('पंजाब') || text.includes('ਪੰਜਾਬ')) {
+    extracted.state = 'Punjab';
+  } else if (lower.includes('rajasthan') || text.includes('ರಾಜಸ್ಥಾನ') || text.includes('राजस्थान')) {
+    extracted.state = 'Rajasthan';
+  } else if (lower.includes('gujarat') || text.includes('ಗುಜರಾತ್') || text.includes('गुजरात') || text.includes('ગુજરાત')) {
+    extracted.state = 'Gujarat';
+  } else if (lower.includes('odisha') || text.includes('ಒಡಿಶಾ') || text.includes('ओडिशा') || text.includes('ଓଡ଼ିଶା')) {
+    extracted.state = 'Odisha';
+  } else if (lower.includes('assam') || text.includes('ಅಸ್ಸಾಂ') || text.includes('असम') || text.includes('অসম')) {
+    extracted.state = 'Assam';
   }
 
   // 6. Extract District
   const districtKeywords = [
-    { key: 'Haveri', aliases: ['haveri', 'ಹಾವೇರಿ', 'हावेरी'] },
-    { key: 'Dharwad', aliases: ['dharwad', 'ಧಾರವಾಡ', 'धारवाड़'] },
-    { key: 'Belagavi', aliases: ['belagavi', 'belgaum', 'ಬೆಳಗಾವಿ', 'बेलगावी'] },
-    { key: 'Mandya', aliases: ['mandya', 'ಮಂಡ್ಯ', 'मांड्या'] },
-    { key: 'Mysuru', aliases: ['mysuru', 'mysore', 'ಮೈಸೂರು', 'मैसूर'] },
+    { key: 'Haveri', aliases: ['haveri', 'ಹಾವೇರಿ', 'हावेरी', 'ஹாவேரி', 'హావేరి'] },
+    { key: 'Dharwad', aliases: ['dharwad', 'ಧಾರವಾಡ', 'धारवाड़', 'தார்வாட்', 'ధార్వాడ్'] },
+    { key: 'Belagavi', aliases: ['belagavi', 'belgaum', 'ಬೆಳಗಾವಿ', 'बेलगावी', 'బెళగావి'] },
+    { key: 'Mandya', aliases: ['mandya', 'ಮಂಡ್ಯ', 'मांड्या', 'மண்டியா'] },
+    { key: 'Mysuru', aliases: ['mysuru', 'mysore', 'ಮೈಸೂರು', 'मैसूर', 'மைசூர்'] },
     { key: 'Ballari', aliases: ['ballari', 'bellary', 'ಬಳ್ಳಾರಿ', 'बेल्लारी'] },
     { key: 'Shivamogga', aliases: ['shivamogga', 'shimoga', 'ಶಿವಮೊಗ್ಗ', 'शिमोगा'] },
-    { key: 'Bengaluru Rural', aliases: ['bengaluru rural', 'bangalore rural', 'ಬೆಂಗಳೂರು ಗ್ರಾಮಾಂತರ'] },
+    { key: 'Bengaluru Rural', aliases: ['bengaluru rural', 'bangalore rural', 'ಬೆಂಗಳೂರು ಗ್ರಾಮಾಂತರ', 'बेंगलुरु ग्रामीण'] },
+    { key: 'Pune', aliases: ['pune', 'पुणे', 'ಪುಣೆ', 'புனே'] },
+    { key: 'Patna', aliases: ['patna', 'पटना', 'ಪಟ್ನಾ'] },
+    { key: 'Varanasi', aliases: ['varanasi', 'वाराणसी', 'ವಾರಣಾಸಿ'] },
+    { key: 'Madurai', aliases: ['madurai', 'மதுரை', 'ಮಧುರೈ'] },
   ];
   for (const d of districtKeywords) {
     if (d.aliases.some((alias) => lower.includes(alias) || text.includes(alias))) {
@@ -173,13 +231,12 @@ function extractCitizenDetails(rawText: string, defaultProfile?: CitizenProfile)
     }
   }
 
-  // 7. Extract Name
+  // 7. Extract Name across scripts
   const nameMatch =
-    text.match(/(?:my name is|i am|ನನ್ನ ಹೆಸರು|ಹೆಸರು)\s+([A-Za-z\u0C80-\u0CFF\u0900-\u097F]{2,20})/i) ||
-    text.match(/(?:मेरा नाम|मैं)\s+([^\s,]{3,20})/i);
+    text.match(/(?:my name is|i am|ನನ್ನ ಹೆಸರು|ಹೆಸರು|मेरा नाम|मैं|என் பெயர்|నా పేరు|എന്റെ പേര്|আমার নাম|माझं नाव|મારું નામ|ਮੇਰਾ ਨਾਂ|میرا نام)\s+([^\s,.:;]{2,25})/i);
   if (nameMatch && nameMatch[1]) {
     const raw = nameMatch[1].trim();
-    if (!['here', 'a', 'the', 'farmer', 'student', 'worker'].includes(raw.toLowerCase())) {
+    if (!['here', 'a', 'the', 'farmer', 'student', 'worker', 'citizen'].includes(raw.toLowerCase())) {
       extracted.fullName = raw;
     }
   }
@@ -206,14 +263,18 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
   const [inputText, setInputText] = useState('');
   const [stage, setStage] = useState<'input' | 'extracted'>('input');
 
-  // Status Indicator: 'ready' | 'listening' | 'captured' | 'unavailable'
+  // Status Indicator: 'ready' | 'listening' | 'captured' | 'unavailable' | 'error'
   const [micStatus, setMicStatus] = useState<MicStatus>('ready');
 
-  // Explicit Browser Error State
+  // Browser Speech & Audio State
   const [errorType, setErrorType] = useState<
     'not-allowed' | 'not-found' | 'not-readable' | 'security' | 'abort' | 'insecure' | 'unsupported' | 'network' | 'language' | 'other' | null
   >(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  // Text-to-Speech Output state
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
 
   // Extracted citizen profile draft
   const [draftProfile, setDraftProfile] = useState<CitizenProfile>(() => ({
@@ -236,6 +297,9 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
   const recognitionRef = useRef<any>(null);
   const activeStreamRef = useRef<MediaStream | null>(null);
 
+  const currentLangOption = getLanguageOption(language);
+  const activeSpeechLocale = currentLangOption?.speechCode || `${language}-IN`;
+
   // Prevent background page scrolling while modal is open
   useEffect(() => {
     if (isOpen) {
@@ -246,6 +310,24 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
       };
     }
   }, [isOpen]);
+
+  // Load available speech synthesis voices for text-to-speech output
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      const loadVoices = () => {
+        try {
+          const v = window.speechSynthesis.getVoices();
+          setAvailableVoices(v);
+        } catch {
+          // ignore
+        }
+      };
+      loadVoices();
+      if (window.speechSynthesis.onvoiceschanged !== undefined) {
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+      }
+    }
+  }, []);
 
   // Sync draft profile when modal opens or currentProfile changes
   useEffect(() => {
@@ -259,8 +341,10 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
       setInputText('');
       setInputMode('voice');
       setMicStatus('ready');
+      stopSpeakingAudio();
     } else {
       stopListening();
+      stopSpeakingAudio();
     }
   }, [isOpen, currentProfile]);
 
@@ -268,6 +352,7 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
   useEffect(() => {
     return () => {
       stopListening();
+      stopSpeakingAudio();
     };
   }, []);
 
@@ -296,8 +381,57 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
     setIsRecording(false);
   };
 
-  // Start real browser Web Speech API directly from user click action
+  // Stop Text-to-Speech audio output
+  const stopSpeakingAudio = () => {
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // ignore
+      }
+    }
+    setIsSpeaking(false);
+  };
+
+  // Speak aloud in currently selected language
+  const speakTextInSelectedLanguage = (textToSpeak: string) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+
+    if (isSpeaking) {
+      stopSpeakingAudio();
+      return;
+    }
+
+    try {
+      window.speechSynthesis.cancel();
+      const cleaned = cleanForTTS(textToSpeak);
+      const utterance = new SpeechSynthesisUtterance(cleaned);
+
+      const { voice, targetLangCode } = findBestVoiceForLanguage(language, availableVoices);
+      if (voice) {
+        utterance.voice = voice;
+        utterance.lang = voice.lang || targetLangCode;
+      } else {
+        utterance.lang = targetLangCode || activeSpeechLocale;
+      }
+
+      utterance.rate = 0.95;
+      utterance.pitch = 1.0;
+
+      utterance.onstart = () => setIsSpeaking(true);
+      utterance.onend = () => setIsSpeaking(false);
+      utterance.onerror = () => setIsSpeaking(false);
+
+      window.speechSynthesis.speak(utterance);
+    } catch (err) {
+      console.warn('TTS playback error:', err);
+      setIsSpeaking(false);
+    }
+  };
+
+  // Start real browser Web Speech API for selected 22 Scheduled Indian Language
   const startListening = async () => {
+    stopSpeakingAudio();
     setErrorType(null);
     setErrorMessage(null);
 
@@ -306,26 +440,18 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
       setIsRecording(false);
       setErrorType('insecure');
       setErrorMessage(
-        language === 'kn'
-          ? 'ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶಕ್ಕೆ ಸುರಕ್ಷಿತ ಸಂಪರ್ಕ (HTTPS) ಅಗತ್ಯವಿದೆ.'
-          : language === 'hi'
-          ? 'माइक्रोफ़ोन एक्सेस के लिए एक सुरक्षित कनेक्शन (HTTPS) आवश्यक है।'
-          : 'Microphone access requires a secure connection (HTTPS).'
+        t.voiceUnavailableNotice || 'Microphone access requires a secure connection (HTTPS).'
       );
       setMicStatus('error');
       return;
     }
 
-    // 2. Request microphone stream directly from the user click action
+    // 2. Request microphone stream directly from user click action
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
       setIsRecording(false);
       setErrorType('unsupported');
       setErrorMessage(
-        language === 'kn'
-          ? 'ಈ ಬ್ರೌಸರ್‌ನಲ್ಲಿ ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶ ಬೆಂಬಲಿತವಾಗಿಲ್ಲ.'
-          : language === 'hi'
-          ? 'इस ब्राउज़र में माइक्रोफ़ोन एक्सेस समर्थित नहीं है।'
-          : 'Microphone access is not supported in this browser.'
+        `Voice input is not supported in this browser. Please use text input or try Chrome.`
       );
       setMicStatus('error');
       return;
@@ -344,82 +470,32 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
       if (errName === 'NotAllowedError' || errName === 'PermissionDeniedError') {
         setErrorType('not-allowed');
         setErrorMessage(
-          language === 'kn'
-            ? 'ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶವನ್ನು ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ. ದಯವಿಟ್ಟು ಮೈಕ್ರೊಫೋನ್ ಅನುಮತಿ ನೀಡಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.'
-            : language === 'hi'
-            ? 'माइक्रोफ़ोन एक्सेस अवरुद्ध है। कृपया माइक्रोफ़ोन एक्सेस की अनुमति दें और पुनः प्रयास करें।'
-            : 'Microphone access is blocked. Please allow microphone access and try again.'
+          'Microphone access is blocked. Please allow microphone permissions in your browser and try again.'
         );
       } else if (errName === 'NotFoundError' || errName === 'DevicesNotFoundError') {
         setErrorType('not-found');
-        setErrorMessage(
-          language === 'kn'
-            ? 'ಯಾವುದೇ ಮೈಕ್ರೊಫೋನ್ ಪತ್ತೆಯಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು ಮೈಕ್ರೊಫೋನ್ ಸಂಪರ್ಕಿಸಿ ಅಥವಾ ಸಕ್ರಿಯಗೊಳಿಸಿ.'
-            : language === 'hi'
-            ? 'कोई माइक्रोफ़ोन नहीं मिला। कृपया माइक्रोफ़ोन कनेक्ट या सक्षम करें।'
-            : 'No microphone was detected. Please connect or enable a microphone.'
-        );
+        setErrorMessage('No microphone was detected. Please connect or enable a microphone.');
       } else if (errName === 'NotReadableError' || errName === 'TrackStartError') {
         setErrorType('not-readable');
-        setErrorMessage(
-          language === 'kn'
-            ? 'ಮೈಕ್ರೊಫೋನ್ ಈಗಾಗಲೇ ಮತ್ತೊಂದು ಅಪ್ಲಿಕೇಶನ್‌ನಿಂದ ಬಳಕೆಯಲ್ಲಿದೆ.'
-            : language === 'hi'
-            ? 'माइक्रोफ़ोन पहले से ही किसी अन्य एप्लिकेशन द्वारा उपयोग में है।'
-            : 'The microphone is already being used by another application.'
-        );
+        setErrorMessage('The microphone is already in use by another application.');
       } else if (errName === 'SecurityError') {
         setErrorType('security');
-        setErrorMessage(
-          language === 'kn'
-            ? 'ಈ ಪರಿಸರದಲ್ಲಿ ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶ ಲಭ್ಯವಿಲ್ಲ.'
-            : language === 'hi'
-            ? 'इस वातावरण में माइक्रोफ़ोन एक्सेस उपलब्ध नहीं है।'
-            : 'Microphone access is not available in this environment.'
-        );
+        setErrorMessage('Microphone access is restricted in this browser environment.');
       } else if (errName === 'AbortError') {
         setErrorType('abort');
-        setErrorMessage(
-          language === 'kn'
-            ? 'ಮೈಕ್ರೊಫೋನ್ ವಿನಂತಿಯನ್ನು ರದ್ದುಗೊಳಿಸಲಾಗಿದೆ. ದಯವಿಟ್ಟು ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.'
-            : language === 'hi'
-            ? 'माइक्रोफ़ोन अनुरोध बाधित हुआ। कृपया पुनः प्रयास करें।'
-            : 'Microphone access was aborted. Please try again.'
-        );
-      } else if (errName === 'OverconstrainedError') {
-        setErrorType('not-found');
-        setErrorMessage(
-          language === 'kn'
-            ? 'ಸೂಕ್ತವಾದ ಮೈಕ್ರೊಫೋನ್ ಸಾಧನ ಸಿಗಲಿಲ್ಲ.'
-            : language === 'hi'
-            ? 'उपयुक्त माइक्रोफ़ोन डिवाइस नहीं मिला।'
-            : 'No suitable microphone device could be found.'
-        );
+        setErrorMessage('Microphone access request was cancelled. Please try again.');
       } else {
         setErrorType('other');
-        setErrorMessage(
-          errMsg ||
-            (language === 'kn'
-              ? 'ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶ ವಿಫಲವಾಗಿದೆ.'
-              : language === 'hi'
-              ? 'माइक्रोफ़ोन एक्सेस विफल रहा।'
-              : 'Microphone access failed.')
-        );
+        setErrorMessage(errMsg || 'Microphone access failed. Please use text input instead.');
       }
       return;
     }
 
-    // 3. Validate stream: Confirm stream exists, audio tracks exist, and at least one is enabled
+    // 3. Validate audio track
     if (!stream || !stream.getAudioTracks || stream.getAudioTracks().length === 0) {
       setIsRecording(false);
       setErrorType('not-found');
-      setErrorMessage(
-        language === 'kn'
-          ? 'ಯಾವುದೇ ಆಡಿಯೊ ಟ್ರ್ಯಾಕ್ ಕಂಡುಬಂದಿಲ್ಲ. ದಯವಿಟ್ಟು ಮೈಕ್ರೊಫೋನ್ ಪರಿಶೀಲಿಸಿ.'
-          : language === 'hi'
-          ? 'कोई ऑडियो ट्रैक नहीं मिला। कृपया माइक्रोफ़ोन जांचें।'
-          : 'No active audio track was found on the microphone.'
-      );
+      setErrorMessage('No active audio track was found on the microphone.');
       setMicStatus('error');
       return;
     }
@@ -429,21 +505,14 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
     if (!activeTrack) {
       setIsRecording(false);
       setErrorType('not-readable');
-      setErrorMessage(
-        language === 'kn'
-          ? 'ಮೈಕ್ರೊಫೋನ್ ಆಡಿಯೊ ಟ್ರ್ಯಾಕ್ ಸಕ್ರಿಯವಾಗಿಲ್ಲ.'
-          : language === 'hi'
-          ? 'माइक्रोफ़ोन ऑडियो ट्रैक सक्रिय नहीं है।'
-          : 'The microphone audio track is disabled or inactive.'
-      );
+      setErrorMessage('The microphone audio track is disabled or inactive.');
       setMicStatus('error');
       return;
     }
 
-    // KEEP STREAM ALIVE while recognition is active (tracks stopped only when recording ends)
     activeStreamRef.current = stream;
 
-    // 4. Initialize SpeechRecognition with selected language
+    // 4. Initialize SpeechRecognition with selected 22-language locale
     const windowWithSpeech = window as any;
     const SpeechRecognitionClass =
       windowWithSpeech.SpeechRecognition || windowWithSpeech.webkitSpeechRecognition;
@@ -452,11 +521,7 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
       setIsRecording(false);
       setErrorType('unsupported');
       setErrorMessage(
-        language === 'kn'
-          ? 'ಈ ಬ್ರೌಸರ್‌ನಲ್ಲಿ ಧ್ವನಿ ಗುರುತಿಸುವಿಕೆ ಬೆಂಬಲಿತವಾಗಿಲ್ಲ. ದಯವಿಟ್ಟು ಟೈಪ್ ಮಾಡಿ.'
-          : language === 'hi'
-          ? 'इस ब्राउज़र में आवाज़ पहचान समर्थित नहीं है। कृपया इसके बजाय टाइप करें।'
-          : 'Voice recognition is not supported in this browser.'
+        `Voice input is not available in this browser. Please try Chrome or use text input.`
       );
       setMicStatus('error');
       if (activeStreamRef.current) {
@@ -486,9 +551,8 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
 
-      // Exact language selection: Kannada -> kn-IN, Hindi -> hi-IN, English -> en-IN
-      const langCode = language === 'kn' ? 'kn-IN' : language === 'hi' ? 'hi-IN' : 'en-IN';
-      recognition.lang = langCode;
+      // Exact language locale for the selected language from single source of truth
+      recognition.lang = activeSpeechLocale;
 
       recognition.onstart = () => {
         setIsRecording(true);
@@ -518,78 +582,43 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
         console.warn('SpeechRecognition onerror:', event.error, event);
 
         if (event.error === 'no-speech') {
-          // User paused; keep listening without reporting error
           return;
         }
 
         if (event.error === 'aborted') {
-          // Stopped intentionally
           return;
         }
 
         stopListening();
-        setMicStatus('error');
 
         if (event.error === 'not-allowed') {
           setErrorType('not-allowed');
+          setMicStatus('error');
+          setErrorMessage('Microphone access is blocked. Please allow microphone permissions and try again.');
+        } else if (event.error === 'bad-grammar' || event.error === 'language-not-supported') {
+          // Graceful fallback: Do NOT switch language to English; show friendly message and offer text input
+          setErrorType('language');
+          setMicStatus('unavailable');
           setErrorMessage(
-            language === 'kn'
-              ? 'ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶವನ್ನು ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ. ದಯವಿಟ್ಟು ಮೈಕ್ರೊಫೋನ್ ಅನುಮತಿ ನೀಡಿ ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ.'
-              : language === 'hi'
-              ? 'माइक्रोफ़ोन एक्सेस अवरुद्ध है। कृपया माइक्रोफ़ोन एक्सेस की अनुमति दें और पुनः प्रयास करें।'
-              : 'Microphone access is blocked. Please allow microphone access and try again.'
-          );
-        } else if (event.error === 'audio-capture') {
-          setErrorType('not-found');
-          setErrorMessage(
-            language === 'kn'
-              ? 'ಯಾವುದೇ ಮೈಕ್ರೊಫೋನ್ ಪತ್ತೆಯಾಗಿಲ್ಲ ಅಥವಾ ಆಡಿಯೊ ಕ್ಯಾಪ್ಚರ್ ವಿಫಲವಾಗಿದೆ.'
-              : language === 'hi'
-              ? 'कोई माइक्रोफ़ोन नहीं मिला या ऑडियो कैप्चर विफल रहा।'
-              : 'No microphone was detected or audio capture failed.'
+            `Voice input for this language (${currentLangOption.label}) is not available in this browser. Please try Chrome or use text input.`
           );
         } else if (event.error === 'network') {
           setErrorType('network');
-          setErrorMessage(
-            language === 'kn'
-              ? 'ಧ್ವನಿ ಗುರುತಿಸುವಿಕೆ ನೆಟ್‌ವರ್ಕ್ ದೋಷ. ದಯವಿಟ್ಟು ಇಂಟರ್ನೆಟ್ ಸಂಪರ್ಕವನ್ನು ಪರಿಶೀಲಿಸಿ.'
-              : language === 'hi'
-              ? 'आवाज़ पहचान नेटवर्क त्रुटि। कृपया इंटरनेट कनेक्शन जांचें।'
-              : 'Voice recognition network error. Please check your internet connection.'
-          );
+          setMicStatus('error');
+          setErrorMessage('Voice recognition network error. Please check your internet connection.');
         } else if (event.error === 'service-not-allowed') {
           setErrorType('security');
-          setErrorMessage(
-            language === 'kn'
-              ? 'ಈ ಬ್ರೌಸರ್ ಪರಿಸರದಲ್ಲಿ ಧ್ವನಿ ಗುರುತಿಸುವಿಕೆ ಸೇವೆಯನ್ನು ಅನುಮತಿಸಲಾಗಿಲ್ಲ.'
-              : language === 'hi'
-              ? 'इस ब्राउज़र वातावरण में आवाज़ पहचान सेवा की अनुमति नहीं है।'
-              : 'Voice recognition service is not permitted in this browser environment.'
-          );
-        } else if (event.error === 'bad-grammar' || event.error === 'language-not-supported') {
-          setErrorType('language');
-          setErrorMessage(
-            language === 'kn'
-              ? `'${langCode}' ಭಾಷೆ ಈ ಬ್ರೌಸರ್‌ನಲ್ಲಿ ಬೆಂಬಲಿಸದಿರಬಹುದು.`
-              : language === 'hi'
-              ? `'${langCode}' भाषा इस ब्राउज़र में समर्थित नहीं हो सकती है।`
-              : `Language '${langCode}' may not be supported by this browser speech engine.`
-          );
+          setMicStatus('error');
+          setErrorMessage('Voice recognition service is not permitted in this browser.');
         } else {
           setErrorType('other');
-          setErrorMessage(
-            language === 'kn'
-              ? `ಧ್ವನಿ ಗುರುತಿಸುವಿಕೆ ದೋಷ: ${event.error}`
-              : language === 'hi'
-              ? `आवाज़ पहचान त्रुटि: ${event.error}`
-              : `Voice capture error: ${event.error}.`
-          );
+          setMicStatus('error');
+          setErrorMessage(`Voice capture error: ${event.error}. Please try again or use text input.`);
         }
       };
 
       recognition.onend = () => {
         setIsRecording(false);
-        // Release stream tracks when recognition ends
         if (activeStreamRef.current) {
           activeStreamRef.current.getTracks().forEach((track) => {
             try {
@@ -614,18 +643,13 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
       console.warn('Failed to start speech recognition:', err);
       stopListening();
       setErrorType('unsupported');
+      setMicStatus('unavailable');
       setErrorMessage(
-        language === 'kn'
-          ? 'ಧ್ವನಿ ಗುರುತಿಸುವಿಕೆ ಪ್ರಾರಂಭಿಸಲು ವಿಫಲವಾಗಿದೆ.'
-          : language === 'hi'
-          ? 'आवाज़ पहचान शुरू करने में विफल।'
-          : err?.message || 'Voice recognition is not supported in this browser.'
+        `Voice input for this language (${currentLangOption.label}) is not available in this browser. Please try Chrome or use text input.`
       );
-      setMicStatus('error');
     }
   };
 
-  // Handle clicking the Voice action button (Toggles Listening - NEVER switches to type)
   const handleVoiceButtonClick = () => {
     if (inputMode !== 'voice') {
       setInputMode('voice');
@@ -640,15 +664,14 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
     }
   };
 
-  // Handle switching manually to Type Instead mode
   const handleTypeInsteadClick = () => {
     stopListening();
+    stopSpeakingAudio();
     setErrorType(null);
     setErrorMessage(null);
     setInputMode('text');
   };
 
-  // Dedicated Try Again handler that re-executes microphone initialization
   const handleTryAgain = () => {
     setErrorType(null);
     setErrorMessage(null);
@@ -656,7 +679,6 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
     startListening();
   };
 
-  // Process entered/spoken text into citizen profile
   const handleProcessText = () => {
     if (!inputText.trim()) return;
     const extracted = extractCitizenDetails(inputText, currentProfile);
@@ -667,8 +689,8 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
     setStage('extracted');
   };
 
-  // Confirm extracted profile and save
   const handleConfirm = (autoCheck: boolean = false) => {
+    stopSpeakingAudio();
     if (onConfirmProfile) {
       onConfirmProfile(draftProfile, autoCheck);
     }
@@ -684,40 +706,50 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
     onClose();
   };
 
-  if (!isOpen) return null;
+  // Build spoken summary for Extracted stage
+  const getUnderstoodSpokenSummary = () => {
+    const parts = [
+      `${t.weUnderstood || 'Information verified'}.`,
+      `${t.fullNameLabel || 'Name'}: ${draftProfile.fullName || 'Citizen'}.`,
+      `${t.ageLabel || 'Age'}: ${draftProfile.age}.`,
+      `${t.occupationLabel || 'Occupation'}: ${draftProfile.occupation}.`,
+      `${t.stateLabel || 'State'}: ${draftProfile.state}, ${draftProfile.district}.`,
+      draftProfile.landHoldingAcres && draftProfile.landHoldingAcres > 0
+        ? `${t.cultivableLandTitle || 'Land'}: ${draftProfile.landHoldingAcres} ${t.acresUnit || 'acres'}.`
+        : '',
+      `${t.incomeLabel || 'Income'}: ${draftProfile.annualIncome} rupees.`,
+    ];
+    return parts.filter(Boolean).join(' ');
+  };
 
-  const placeholderText = language === 'kn'
-    ? 'ನಿಮ್ಮ ಅಗತ್ಯತೆಗಳನ್ನು ಮಾತನಾಡಿ ಅಥವಾ ಟೈಪ್ ಮಾಡಿ...'
-    : language === 'hi'
-    ? 'अपनी आवश्यकताएं बोलें या टाइप करें...'
-    : 'Speak naturally or type your requirements...';
+  if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-on-surface/50 backdrop-blur-sm animate-fade-in overflow-hidden">
-      <div className="relative w-full max-w-2xl rounded-3xl bg-surface-container-lowest p-6 sm:p-8 shadow-2xl border border-outline-variant/30 flex flex-col gap-5 max-h-[92vh] overflow-y-auto">
+      <div className="relative w-full max-w-2xl rounded-2xl sm:rounded-3xl bg-surface-container-lowest p-4 sm:p-6 shadow-2xl border border-outline-variant/30 flex flex-col gap-3.5 sm:gap-4 max-h-[92vh] overflow-y-auto">
         
-        {/* Top Header Bar with Back and Close Buttons */}
-        <div className="flex items-center justify-between border-b border-outline-variant/20 pb-4">
-          <div className="flex items-center gap-3">
+        {/* Top Header Bar with Back and Close */}
+        <div className="flex items-center justify-between border-b border-outline-variant/20 pb-3">
+          <div className="flex items-center gap-2.5">
             <button
               onClick={onClose}
               type="button"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-bold text-xs shadow-xs border border-outline-variant/30 transition-all hover:scale-105 cursor-pointer"
+              className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full bg-surface-container-high hover:bg-surface-container-highest text-on-surface font-bold text-xs shadow-xs border border-outline-variant/30 transition-all cursor-pointer"
               aria-label={t.back}
             >
-              <span className="material-symbols-outlined text-[16px]">arrow_back</span>
+              <span className="material-symbols-outlined text-[15px]">arrow_back</span>
               <span>{t.back}</span>
             </button>
-            <div className="flex items-center gap-2.5">
-              <div className="h-9 w-9 rounded-full bg-secondary flex items-center justify-center text-on-secondary shadow-md">
-                <span className="material-symbols-outlined text-[20px]">record_voice_over</span>
+            <div className="flex items-center gap-2">
+              <div className="h-8 w-8 rounded-full bg-secondary flex items-center justify-center text-on-secondary shadow-md flex-shrink-0">
+                <span className="material-symbols-outlined text-[18px]">record_voice_over</span>
               </div>
               <div>
-                <h3 className="text-base sm:text-lg font-bold text-on-surface leading-tight">
+                <h3 className="text-sm sm:text-base font-bold text-on-surface leading-tight">
                   {t.vaTitle}
                 </h3>
-                <p className="text-[11px] text-on-surface-variant font-medium">
-                  {placeholderText}
+                <p className="text-[10px] sm:text-[11px] text-on-surface-variant font-medium">
+                  {t.typeRequestPlaceholder}
                 </p>
               </div>
             </div>
@@ -725,53 +757,55 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
 
           <button
             onClick={onClose}
-            className="w-9 h-9 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface flex items-center justify-center transition-colors cursor-pointer"
+            className="w-8 h-8 rounded-full bg-surface-container hover:bg-surface-container-high text-on-surface flex items-center justify-center transition-colors cursor-pointer"
             title="Close"
           >
-            <span className="material-symbols-outlined text-[20px]">close</span>
+            <span className="material-symbols-outlined text-[18px]">close</span>
           </button>
         </div>
 
-        {/* Language Selector & Mode Control Bar */}
-        <div className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-2xl bg-surface-container-low border border-outline-variant/20">
+        {/* Language Selector (ALL 22 SCHEDULED LANGUAGES) & Mode Switcher */}
+        <div className="flex flex-wrap items-center justify-between gap-2 p-2 rounded-xl sm:rounded-2xl bg-surface-container-low border border-outline-variant/20">
+          {/* Dynamic 22-Language Dropdown - Single Source of Truth */}
           <div className="flex items-center gap-2">
             <span className="text-xs font-mono font-bold text-on-surface-variant uppercase pl-1">
-              {t.vaDialect}
+              {t.vaDialect}:
             </span>
-            <div className="flex items-center gap-1">
-              {[
-                { code: 'kn' as const, label: 'ಕನ್ನಡ' },
-                { code: 'hi' as const, label: 'हिन्दी' },
-                { code: 'en' as const, label: 'English' },
-              ].map((item) => (
-                <button
-                  key={item.code}
-                  type="button"
-                  onClick={() => {
-                    setLanguage(item.code);
-                    if (isRecording) {
-                      stopListening();
-                    }
-                  }}
-                  className={`px-3 py-1 text-xs rounded-full font-bold transition-all cursor-pointer ${
-                    language === item.code
-                      ? 'bg-primary text-on-primary shadow-xs'
-                      : 'bg-surface-container-high text-on-surface hover:bg-surface-container'
-                  }`}
-                >
-                  {item.label}
-                </button>
-              ))}
+            <div className="relative flex items-center">
+              <select
+                value={language}
+                onChange={(e) => {
+                  const newLang = e.target.value as Language;
+                  setLanguage(newLang);
+                  if (isRecording) {
+                    stopListening();
+                  }
+                  stopSpeakingAudio();
+                }}
+                className="h-8 pl-3 pr-7 rounded-full bg-surface-container-high text-primary text-xs font-bold border border-outline-variant/30 appearance-none focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer shadow-xs transition-colors"
+                title="Select language (22 Indian languages supported)"
+              >
+                {ALL_SUPPORTED_LANGUAGES.map((l) => (
+                  <option key={l.code} value={l.code}>
+                    {l.native} — {l.label}
+                  </option>
+                ))}
+              </select>
+              <span className="material-symbols-outlined absolute right-2 text-on-surface-variant pointer-events-none text-[15px]">
+                expand_more
+              </span>
             </div>
+            <span className="font-mono text-[10px] px-2 py-0.5 rounded-full bg-primary/10 text-primary font-bold hidden sm:inline">
+              {activeSpeechLocale}
+            </span>
           </div>
 
           {/* Mode Switcher Buttons */}
           <div className="flex items-center gap-1.5 bg-surface-container-lowest p-1 rounded-xl border border-outline-variant/20">
-            {/* The Voice button: Starts recording / shows Listening... */}
             <button
               type="button"
               onClick={handleVoiceButtonClick}
-              className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1 cursor-pointer ${
                 inputMode === 'voice'
                   ? isRecording
                     ? 'bg-error text-on-error shadow-md animate-pulse ring-2 ring-error/50'
@@ -780,145 +814,94 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
               }`}
               title={isRecording ? 'Click to stop listening' : 'Click to start voice recording'}
             >
-              <span className="material-symbols-outlined text-[16px]">
+              <span className="material-symbols-outlined text-[15px]">
                 {isRecording ? 'stop' : 'mic'}
               </span>
               <span>
                 {inputMode === 'voice' && isRecording
-                  ? language === 'kn'
-                    ? '🔴 ಆಲಿಸಲಾಗುತ್ತಿದೆ... ನಿಲ್ಲಿಸಿ'
-                    : language === 'hi'
-                    ? '🔴 सुन रहा है... रोकें'
-                    : '🔴 Listening... Stop'
-                  : language === 'kn'
-                  ? '🎤 ಮಾತನಾಡಲು ಪ್ರಾರಂಭಿಸಿ'
-                  : language === 'hi'
-                  ? '🎤 बोलना शुरू करें'
-                  : '🎤 Start Speaking'}
+                  ? t.stopSpeaking || 'Stop'
+                  : t.startSpeaking || 'Speak'}
               </span>
             </button>
 
-            {/* Type Instead Button (Only manual fallback) */}
             <button
               type="button"
               onClick={handleTypeInsteadClick}
-              className={`px-3.5 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1.5 cursor-pointer ${
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-all flex items-center gap-1 cursor-pointer ${
                 inputMode === 'text'
                   ? 'bg-secondary text-on-secondary shadow-xs'
                   : 'text-on-surface-variant hover:text-on-surface hover:bg-surface-container'
               }`}
             >
-              <span className="material-symbols-outlined text-[16px]">keyboard</span>
-              <span>
-                {language === 'kn'
-                  ? '⌨ ಬದಲಿಗೆ ಟೈಪ್ ಮಾಡಿ'
-                  : language === 'hi'
-                  ? '⌨ इसके बजाय टाइप करें'
-                  : '⌨ Type Instead'}
-              </span>
+              <span className="material-symbols-outlined text-[15px]">keyboard</span>
+              <span>{t.orTypeInstead || 'Type Instead'}</span>
             </button>
           </div>
         </div>
 
         {/* STAGE 1: INPUT CAPTURE (VOICE OR TEXT) */}
         {stage === 'input' && (
-          <div className="space-y-4 animate-fade-in">
+          <div className="space-y-3 animate-fade-in">
             {/* VOICE MODE */}
             {inputMode === 'voice' && (
-              <div className="p-5 sm:p-6 rounded-2xl bg-inverse-surface text-inverse-on-surface relative overflow-hidden flex flex-col items-center text-center gap-4 shadow-inner">
+              <div className="p-4 sm:p-5 rounded-2xl bg-inverse-surface text-inverse-on-surface relative overflow-hidden flex flex-col items-center text-center gap-3.5 shadow-inner">
                 
-                {/* 
-                  MICROPHONE STATUS INDICATOR:
-                  - Listening (localized)
-                  - Ready (localized)
-                  - Unavailable (localized)
-                  - Captured (localized)
-                */}
+                {/* Microphone Status Indicator */}
                 <div className="flex items-center justify-between w-full text-xs font-mono text-surface-container-highest">
                   <div className="flex items-center gap-2">
                     <span className="text-[11px] font-bold uppercase tracking-wider text-surface-container-highest">
-                      {language === 'kn' ? 'ಸ್ಥಿತಿ:' : language === 'hi' ? 'स्थिति:' : 'Status:'}
+                      Status:
                     </span>
                     {micStatus === 'listening' && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-error/20 text-error font-bold border border-error/40 animate-pulse">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-error/20 text-error font-bold border border-error/40 animate-pulse">
                         <span className="h-2 w-2 rounded-full bg-error animate-ping"></span>
-                        <span>
-                          {language === 'kn'
-                            ? '🔴 ಆಲಿಸಲಾಗುತ್ತಿದೆ... (Listening)'
-                            : language === 'hi'
-                            ? '🔴 सुन रहा है... (Listening)'
-                            : '🔴 Listening...'}
-                        </span>
+                        <span>{t.voiceListeningStatus || 'Listening...'}</span>
                       </span>
                     )}
                     {micStatus === 'ready' && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-tertiary-fixed/20 text-tertiary-fixed font-bold border border-tertiary-fixed/30">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-tertiary-fixed/20 text-tertiary-fixed font-bold border border-tertiary-fixed/30">
                         <span className="h-2 w-2 rounded-full bg-tertiary-fixed"></span>
-                        <span>
-                          {language === 'kn'
-                            ? '● ಸಿದ್ಧವಾಗಿದೆ (Ready)'
-                            : language === 'hi'
-                            ? '● तैयार है (Ready)'
-                            : '● Ready'}
-                        </span>
+                        <span>Ready ({currentLangOption.native})</span>
                       </span>
                     )}
                     {micStatus === 'captured' && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-primary/20 text-primary-fixed font-bold border border-primary/30">
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-primary/20 text-primary-fixed font-bold border border-primary/30">
                         <span className="material-symbols-outlined text-[14px]">check_circle</span>
-                        <span>
-                          {language === 'kn'
-                            ? '✓ ಧ್ವನಿ ಸೆರೆಹಿಡಿಯಲಾಗಿದೆ'
-                            : language === 'hi'
-                            ? '✓ आवाज़ प्राप्त हुई'
-                            : '✓ Speech Captured'}
-                        </span>
-                      </span>
-                    )}
-                    {micStatus === 'error' && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-error-container text-on-error-container font-bold border border-error/40">
-                        <span className="material-symbols-outlined text-[14px]">error</span>
-                        <span>
-                          {language === 'kn'
-                            ? '⚠ ದೋಷ (Error)'
-                            : language === 'hi'
-                            ? '⚠ त्रुटि (Error)'
-                            : '⚠ Error'}
-                        </span>
+                        <span>{t.vaSpeechResolved || 'Speech Captured'}</span>
                       </span>
                     )}
                     {micStatus === 'unavailable' && (
-                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-error-container text-on-error-container font-bold border border-error/30">
-                        <span className="material-symbols-outlined text-[14px]">warning</span>
-                        <span>
-                          {language === 'kn'
-                            ? '⚠ ಲಭ್ಯವಿಲ್ಲ (Unavailable)'
-                            : language === 'hi'
-                            ? '⚠ अनुपलब्ध है (Unavailable)'
-                            : '⚠ Unavailable'}
-                        </span>
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 font-bold border border-amber-500/40">
+                        <span className="material-symbols-outlined text-[14px]">info</span>
+                        <span>Unavailable in Browser</span>
+                      </span>
+                    )}
+                    {micStatus === 'error' && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-error-container text-on-error-container font-bold border border-error/40">
+                        <span className="material-symbols-outlined text-[14px]">error</span>
+                        <span>Error</span>
                       </span>
                     )}
                   </div>
 
-                  <span className="font-mono text-xs px-2.5 py-1 rounded-full bg-surface/30 text-surface-container-highest border border-surface-container-highest/20">
-                    {language === 'kn' ? 'kn-IN' : language === 'hi' ? 'hi-IN' : 'en-IN'}
+                  <span className="font-mono text-xs px-2.5 py-0.5 rounded-full bg-surface/30 text-surface-container-highest border border-surface-container-highest/20">
+                    {activeSpeechLocale}
                   </span>
                 </div>
 
                 {/* Primary Voice Action Button */}
-                <div className="py-1">
+                <div className="py-0.5">
                   <button
                     type="button"
                     onClick={isRecording ? stopListening : startListening}
-                    className={`relative w-20 h-20 rounded-full flex items-center justify-center transition-all shadow-xl cursor-pointer ${
+                    className={`relative w-18 h-18 rounded-full flex items-center justify-center transition-all shadow-xl cursor-pointer ${
                       isRecording
-                        ? 'bg-error text-on-error scale-110 shadow-error/40'
+                        ? 'bg-error text-on-error scale-105 shadow-error/40'
                         : 'bg-primary text-on-primary hover:scale-105 shadow-primary/30'
                     }`}
                     title={isRecording ? 'Click to stop' : 'Click to start speaking'}
                   >
-                    <span className="material-symbols-outlined text-[36px]">
+                    <span className="material-symbols-outlined text-[32px]">
                       {isRecording ? 'stop' : 'mic'}
                     </span>
                     {isRecording && (
@@ -927,37 +910,25 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
                   </button>
                 </div>
 
-                <div className="space-y-1">
-                  <h4 className="text-base font-bold text-surface-bright">
+                <div className="space-y-0.5">
+                  <h4 className="text-sm sm:text-base font-bold text-surface-bright">
                     {isRecording
-                      ? language === 'kn'
-                        ? '🔴 ಆಲಿಸಲಾಗುತ್ತಿದೆ... ಈಗ ಸಹಜವಾಗಿ ಮಾತನಾಡಿ'
-                        : language === 'hi'
-                        ? '🔴 सुन रहा है... अब सहज रूप से बोलें'
-                        : '🔴 Listening... Speak naturally now'
-                      : language === 'kn'
-                      ? '"ಮಾತನಾಡಲು ಪ್ರಾರಂಭಿಸಿ" ಕ್ಲಿಕ್ ಮಾಡಿ'
-                      : language === 'hi'
-                      ? '"बोलना शुरू करें" पर क्लिक करें'
-                      : 'Click "Start Speaking" to talk'}
+                      ? `Listening in ${currentLangOption.native} (${currentLangOption.label})... Speak naturally.`
+                      : `Click microphone to speak in ${currentLangOption.native} (${currentLangOption.label})`}
                   </h4>
-                  <p className="text-xs text-surface-container-highest max-w-md">
-                    {language === 'kn'
-                      ? 'ನಿಮ್ಮ ಉದ್ಯೋಗ, ವಯಸ್ಸು, ಜಮೀನಿನ ವಿಸ್ತೀರ್ಣ ಅಥವಾ ಜಿಲ್ಲೆಯನ್ನು ಕನ್ನಡ, ಹಿಂದಿ ಅಥವಾ ಇಂಗ್ಲಿಷ್‌ನಲ್ಲಿ ಮಾತನಾಡಿ.'
-                      : language === 'hi'
-                      ? 'अपना व्यवसाय, आयु, भूमि क्षेत्र या जिला हिंदी, कन्नड़ या अंग्रेजी में बोलें।'
-                      : 'Speak your occupation, age, land area, or state in Kannada, Hindi, or English.'}
+                  <p className="text-[11px] text-surface-container-highest max-w-md">
+                    Mention your occupation, age, land area in acres, or district.
                   </p>
                 </div>
 
                 {/* Animated Waveform Indicator */}
-                <div className="flex items-center justify-center gap-1.5 h-6 pt-1">
-                  {[6, 14, 24, 34, 18, 30, 38, 22, 16, 28, 12, 6].map((h, idx) => (
+                <div className="flex items-center justify-center gap-1 h-5">
+                  {[6, 14, 22, 30, 16, 26, 32, 20, 14, 24, 12, 6].map((h, idx) => (
                     <span
                       key={idx}
-                      className="w-1.5 rounded-full bg-tertiary-fixed transition-all duration-150"
+                      className="w-1 rounded-full bg-tertiary-fixed transition-all duration-150"
                       style={{
-                        height: isRecording ? `${Math.max(6, h * 0.9)}px` : '6px',
+                        height: isRecording ? `${Math.max(6, h * 0.75)}px` : '4px',
                         opacity: isRecording ? 1 : 0.35,
                       }}
                     />
@@ -965,19 +936,13 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
                 </div>
 
                 {/* Real-time recognized speech input area (Editable) */}
-                <div className="w-full text-left space-y-2 pt-2">
-                  <label className="text-xs font-mono font-bold text-surface-container-highest flex items-center justify-between">
-                    <span>
-                      {language === 'kn'
-                        ? 'ಗುರುತಿಸಲಾದ ಧ್ವನಿ (ತಿದ್ದುಪಡಿ ಮಾಡಬಹುದು):'
-                        : language === 'hi'
-                        ? 'पहचानी गई आवाज़ (संपादन योग्य):'
-                        : 'Recognized Speech (Editable):'}
-                    </span>
+                <div className="w-full text-left space-y-1.5 pt-1">
+                  <label className="text-[11px] font-mono font-bold text-surface-container-highest flex items-center justify-between">
+                    <span>{t.vaCitizenInput || 'Recognized Speech (Editable):'}</span>
                     {isRecording && (
                       <span className="text-[10px] text-error font-bold flex items-center gap-1">
                         <span className="h-1.5 w-1.5 rounded-full bg-error animate-ping"></span>
-                        {language === 'kn' ? 'ಮೈಕ್ರೊಫೋನ್ ಸಕ್ರಿಯವಾಗಿದೆ' : language === 'hi' ? 'माइक्रोफ़ोन सक्रिय है' : 'Microphone Active'}
+                        Active ({activeSpeechLocale})
                       </span>
                     )}
                   </label>
@@ -990,8 +955,8 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
                         setMicStatus('captured');
                       }
                     }}
-                    placeholder={placeholderText}
-                    className="w-full p-3.5 rounded-xl bg-surface/20 text-surface-bright text-sm border border-surface-container-highest/30 focus:outline-none focus:ring-2 focus:ring-primary placeholder:text-surface-container-highest/60"
+                    placeholder={t.typeRequestPlaceholder || 'Speak naturally or type details here...'}
+                    className="w-full p-3 rounded-xl bg-surface/20 text-surface-bright text-xs sm:text-sm border border-surface-container-highest/30 focus:outline-none focus:ring-1 focus:ring-primary placeholder:text-surface-container-highest/60"
                   />
                 </div>
 
@@ -1001,33 +966,19 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
                     <button
                       type="button"
                       onClick={stopListening}
-                      className="px-4 py-2 rounded-xl bg-error/90 hover:bg-error text-on-error text-xs font-bold shadow transition-all flex items-center gap-1.5 cursor-pointer"
+                      className="px-3.5 py-1.5 rounded-xl bg-error/90 hover:bg-error text-on-error text-xs font-bold shadow transition-all flex items-center gap-1.5 cursor-pointer"
                     >
-                      <span className="material-symbols-outlined text-[16px]">stop</span>
-                      <span>
-                        {language === 'kn' ? 'ಆಲಿಸುವುದನ್ನು ನಿಲ್ಲಿಸಿ' : language === 'hi' ? 'सुनना बंद करें' : 'Stop Listening'}
-                      </span>
+                      <span className="material-symbols-outlined text-[15px]">stop</span>
+                      <span>{t.stopSpeaking || 'Stop Listening'}</span>
                     </button>
                   ) : (
                     <button
                       type="button"
                       onClick={startListening}
-                      className="px-4 py-2 rounded-xl bg-surface-container-high/40 hover:bg-surface-container-high text-surface-bright text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                      className="px-3.5 py-1.5 rounded-xl bg-surface-container-high/40 hover:bg-surface-container-high text-surface-bright text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                     >
-                      <span className="material-symbols-outlined text-[16px]">mic</span>
-                      <span>
-                        {inputText
-                          ? language === 'kn'
-                            ? 'ಇನ್ನಷ್ಟು ಮಾತನಾಡಿ'
-                            : language === 'hi'
-                            ? 'और बोलें'
-                            : 'Speak More'
-                          : language === 'kn'
-                          ? 'ಮಾತನಾಡಲು ಪ್ರಾರಂಭಿಸಿ'
-                          : language === 'hi'
-                          ? 'बोलना शुरू करें'
-                          : 'Start Speaking'}
-                      </span>
+                      <span className="material-symbols-outlined text-[15px]">mic</span>
+                      <span>{inputText ? (t.vaReRecord || 'Speak More') : (t.startSpeaking || 'Start Speaking')}</span>
                     </button>
                   )}
 
@@ -1035,10 +986,10 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
                     type="button"
                     disabled={!inputText.trim()}
                     onClick={handleProcessText}
-                    className="px-6 py-2.5 rounded-xl bg-primary text-on-primary text-xs font-bold shadow-lg hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-2 cursor-pointer ml-auto"
+                    className="px-5 py-2 rounded-xl bg-primary text-on-primary text-xs font-bold shadow hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 cursor-pointer ml-auto"
                   >
-                    <span className="material-symbols-outlined text-[18px]">check_circle</span>
-                    <span>{language === 'kn' ? 'ಸಲ್ಲಿಸಿ' : language === 'hi' ? 'जमा करें' : 'Submit'}</span>
+                    <span className="material-symbols-outlined text-[16px]">check_circle</span>
+                    <span>{t.submitBtn || 'Submit'}</span>
                   </button>
                 </div>
               </div>
@@ -1046,13 +997,13 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
 
             {/* TEXT MODE */}
             {inputMode === 'text' && (
-              <div className="space-y-4">
+              <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <label className="text-xs font-bold text-on-surface uppercase tracking-wider block font-mono">
-                    {language === 'kn' ? 'ನಿಮ್ಮ ಅಗತ್ಯತೆಗಳನ್ನು ಟೈಪ್ ಮಾಡಿ' : language === 'hi' ? 'अपनी आवश्यकताएं टाइप करें' : 'Type Your Requirements'}
+                    Type Your Requirements
                   </label>
                   <span className="text-[11px] text-on-surface-variant font-mono">
-                    {language === 'kn' ? 'ಕೀಬೋರ್ಡ್ ಇನ್‌ಪುಟ್ ಮೋಡ್' : language === 'hi' ? 'कीबोर्ड इनपुट मोड' : 'Keyboard Input Mode'}
+                    {currentLangOption.native} ({currentLangOption.label})
                   </span>
                 </div>
                 <div className="relative">
@@ -1060,118 +1011,73 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
                     rows={4}
                     value={inputText}
                     onChange={(e) => setInputText(e.target.value)}
-                    placeholder={placeholderText}
-                    className="w-full p-4 rounded-2xl bg-surface-container-low text-on-surface text-sm border border-outline-variant/30 focus:outline-none focus:ring-2 focus:ring-primary shadow-inner"
+                    placeholder={t.typeRequestPlaceholder || 'Type your details (e.g. farmer with 2 acres in Karnataka)...'}
+                    className="w-full p-3.5 rounded-xl bg-surface-container-low text-on-surface text-sm border border-outline-variant/30 focus:outline-none focus:ring-1 focus:ring-primary shadow-inner"
                   />
-                  <div className="mt-3 flex items-center justify-between">
+                  <div className="mt-2.5 flex items-center justify-between">
                     <button
                       type="button"
                       onClick={handleVoiceButtonClick}
-                      className="px-4 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
+                      className="px-3.5 py-1.5 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer"
                     >
-                      <span className="material-symbols-outlined text-[16px]">mic</span>
-                      <span>
-                        {language === 'kn' ? 'ಧ್ವನಿ ಮೋಡ್‌ಗೆ ಬದಲಿಸಿ' : language === 'hi' ? 'आवाज़ मोड पर स्विच करें' : 'Switch to Voice'}
-                      </span>
+                      <span className="material-symbols-outlined text-[15px]">mic</span>
+                      <span>Switch to Voice</span>
                     </button>
 
                     <button
                       type="button"
                       disabled={!inputText.trim()}
                       onClick={handleProcessText}
-                      className="px-6 py-2.5 rounded-xl bg-primary text-on-primary text-xs font-bold shadow hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 cursor-pointer"
+                      className="px-5 py-2 rounded-xl bg-primary text-on-primary text-xs font-bold shadow hover:bg-primary-container disabled:opacity-40 disabled:cursor-not-allowed transition-all flex items-center gap-1.5 cursor-pointer"
                     >
-                      <span className="material-symbols-outlined text-[18px]">send</span>
-                      <span>{language === 'kn' ? 'ಸಲ್ಲಿಸಿ' : language === 'hi' ? 'जमा करें' : 'Submit'}</span>
+                      <span className="material-symbols-outlined text-[16px]">send</span>
+                      <span>{t.submitBtn || 'Submit'}</span>
                     </button>
                   </div>
                 </div>
               </div>
             )}
 
-            {/* Browser Error Notification with actual error message and Retry button */}
+            {/* Browser Speech-Recognition Fallback Notice */}
             {errorType && (
-              <div className="p-4 rounded-2xl bg-error-container text-on-error-container text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border border-error/40 shadow-sm animate-fade-in">
+              <div className="p-3.5 rounded-xl bg-surface-container text-on-surface text-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2.5 border border-outline-variant/30 shadow-xs animate-fade-in">
                 <div className="space-y-0.5">
-                  <div className="flex items-center gap-1.5 font-bold text-error">
-                    <span className="material-symbols-outlined text-[18px]">error</span>
+                  <div className="flex items-center gap-1.5 font-bold text-on-surface">
+                    <span className="material-symbols-outlined text-[16px] text-primary">info</span>
                     <span>
-                      {errorType === 'not-allowed'
-                        ? language === 'kn'
-                          ? 'ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶವನ್ನು ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ'
-                          : language === 'hi'
-                          ? 'माइक्रोफ़ोन एक्सेस अवरुद्ध है'
-                          : 'Microphone access is blocked.'
-                        : errorType === 'not-found'
-                        ? language === 'kn'
-                          ? 'ಯಾವುದೇ ಮೈಕ್ರೊಫೋನ್ ಪತ್ತೆಯಾಗಿಲ್ಲ'
-                          : language === 'hi'
-                          ? 'कोई माइक्रोफ़ोन नहीं मिला'
-                          : 'No microphone was detected.'
-                        : errorType === 'not-readable'
-                        ? language === 'kn'
-                          ? 'ಮೈಕ್ರೊಫೋನ್ ಈಗಾಗಲೇ ಬಳಕೆಯಲ್ಲಿದೆ'
-                          : language === 'hi'
-                          ? 'माइक्रोफ़ोन उपयोग में है'
-                          : 'Microphone is currently in use.'
-                        : errorType === 'security'
-                        ? language === 'kn'
-                          ? 'ಮೈಕ್ರೊಫೋನ್ ಪ್ರವೇಶ ನಿರ್ಬಂಧಿಸಲಾಗಿದೆ'
-                          : language === 'hi'
-                          ? 'माइक्रोफ़ोन एक्सेस प्रतिबंधित है'
-                          : 'Microphone access restricted.'
-                        : errorType === 'insecure'
-                        ? language === 'kn'
-                          ? 'ಸುರಕ್ಷಿತ ಸಂಪರ್ಕ (HTTPS) ಅಗತ್ಯವಿದೆ'
-                          : language === 'hi'
-                          ? 'सुरक्षित कनेक्शन (HTTPS) आवश्यक है'
-                          : 'HTTPS required.'
-                        : errorType === 'network'
-                        ? language === 'kn'
-                          ? 'ಧ್ವನಿ ಗುರುತಿಸುವಿಕೆ ನೆಟ್‌ವರ್ಕ್ ದೋಷ'
-                          : language === 'hi'
-                          ? 'आवाज़ पहचान नेटवर्क त्रुटि'
-                          : 'Speech recognition network error.'
-                        : errorType === 'unsupported'
-                        ? language === 'kn'
-                          ? 'ಧ್ವನಿ ಗುರುತಿಸುವಿಕೆ ಬೆಂಬಲಿತವಾಗಿಲ್ಲ'
-                          : language === 'hi'
-                          ? 'आवाज़ पहचान असमर्थित है'
-                          : 'Speech recognition unsupported.'
-                        : language === 'kn'
-                        ? 'ಮೈಕ್ರೊಫೋನ್ ಸಮಸ್ಯೆ ಎದುರಾಗಿದೆ'
-                        : language === 'hi'
-                        ? 'माइक्रोफ़ोन समस्या उत्पन्न हुई'
-                        : 'Microphone issue encountered.'}
+                      {errorType === 'language'
+                        ? 'Speech Engine Notice'
+                        : errorType === 'not-allowed'
+                        ? 'Microphone Permission Required'
+                        : 'Voice Input Notification'}
                     </span>
                   </div>
                   {errorMessage && (
-                    <p className="text-[11px] text-on-error-container leading-relaxed pl-6">
+                    <p className="text-[11px] text-on-surface-variant leading-relaxed pl-5">
                       {errorMessage}
                     </p>
                   )}
                 </div>
 
-                <div className="flex items-center gap-2 pl-6 sm:pl-0">
-                  {errorType !== 'unsupported' && errorType !== 'insecure' && (
+                <div className="flex items-center gap-2 pl-5 sm:pl-0 flex-shrink-0">
+                  {errorType !== 'unsupported' && errorType !== 'insecure' && errorType !== 'language' && (
                     <button
                       type="button"
                       onClick={handleTryAgain}
-                      className="px-3.5 py-1.5 rounded-lg bg-surface-container-lowest text-on-surface font-bold text-xs shadow-xs border border-outline-variant/30 hover:bg-surface-container transition-all cursor-pointer whitespace-nowrap flex items-center gap-1"
+                      className="px-3 py-1.5 rounded-lg bg-surface-container-lowest text-on-surface font-bold text-xs shadow-xs border border-outline-variant/30 hover:bg-surface-container transition-all cursor-pointer whitespace-nowrap flex items-center gap-1"
                     >
-                      <span className="material-symbols-outlined text-[14px]">refresh</span>
-                      <span>
-                        {language === 'kn' ? 'ಮತ್ತೆ ಪ್ರಯತ್ನಿಸಿ' : language === 'hi' ? 'पुनः प्रयास करें' : 'Try Again'}
-                      </span>
+                      <span className="material-symbols-outlined text-[13px]">refresh</span>
+                      <span>Try Again</span>
                     </button>
                   )}
 
                   <button
                     type="button"
                     onClick={handleTypeInsteadClick}
-                    className="px-3.5 py-1.5 rounded-lg bg-primary text-on-primary font-bold text-xs shadow-xs hover:bg-primary-container transition-all cursor-pointer whitespace-nowrap"
+                    className="px-3.5 py-1.5 rounded-lg bg-primary text-on-primary font-bold text-xs shadow-xs hover:bg-primary-container transition-all cursor-pointer whitespace-nowrap flex items-center gap-1"
                   >
-                    {language === 'kn' ? 'ಬದಲಿಗೆ ಟೈಪ್ ಮಾಡಿ' : language === 'hi' ? 'इसके बजाय टाइप करें' : 'Type Instead'}
+                    <span className="material-symbols-outlined text-[14px]">keyboard</span>
+                    <span>{t.orTypeInstead || 'Type Instead'}</span>
                   </button>
                 </div>
               </div>
@@ -1181,50 +1087,73 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
 
         {/* STAGE 2: EXTRACTED PROFILE CONFIRMATION */}
         {stage === 'extracted' && (
-          <div className="space-y-5 animate-fade-in">
-            {/* Header info */}
-            <div className="p-4 rounded-2xl bg-tertiary-fixed/20 border border-tertiary/30 flex items-center justify-between">
+          <div className="space-y-4 animate-fade-in">
+            {/* Header info with Voice Output TTS capability */}
+            <div className="p-3.5 rounded-xl bg-tertiary-fixed/20 border border-tertiary/30 flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
               <div className="flex items-center gap-2">
-                <span className="material-symbols-outlined text-tertiary text-[22px]">verified</span>
+                <span className="material-symbols-outlined text-tertiary text-[20px]">verified</span>
                 <div>
-                  <h4 className="text-sm font-bold text-on-surface">
-                    {t.extractedInfo}
+                  <h4 className="text-xs sm:text-sm font-bold text-on-surface">
+                    {t.extractedInfo || 'Profile Details Extracted'}
                   </h4>
-                  <p className="text-[11px] text-on-surface-variant">
-                    {t.weUnderstood}
+                  <p className="text-[10px] sm:text-[11px] text-on-surface-variant">
+                    {t.weUnderstood || 'Review understood information below before checking schemes.'}
                   </p>
                 </div>
               </div>
-              <button
-                type="button"
-                onClick={() => setStage('input')}
-                className="text-xs font-bold text-primary hover:underline flex items-center gap-1 cursor-pointer"
-              >
-                <span className="material-symbols-outlined text-[16px]">edit</span>
-                <span>{language === 'kn' ? 'ಮತ್ತೆ ಮಾತನಾಡಿ' : language === 'hi' ? 'पुनः प्रयास करें' : 'Re-speak / Edit'}</span>
-              </button>
+
+              <div className="flex items-center gap-2">
+                {/* Voice Output TTS button for Understood profile */}
+                <button
+                  type="button"
+                  onClick={() => speakTextInSelectedLanguage(getUnderstoodSpokenSummary())}
+                  className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1 cursor-pointer border ${
+                    isSpeaking
+                      ? 'bg-primary text-on-primary border-primary shadow-xs animate-pulse'
+                      : 'bg-surface-container-lowest text-primary border-primary/30 hover:bg-primary-fixed/20'
+                  }`}
+                  title="Listen to understood profile details in currently selected language"
+                >
+                  <span className="material-symbols-outlined text-[15px]">
+                    {isSpeaking ? 'stop' : 'volume_up'}
+                  </span>
+                  <span>{isSpeaking ? 'Stop Audio' : (t.vaListenAudio || 'Listen')}</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    stopSpeakingAudio();
+                    setStage('input');
+                  }}
+                  className="px-2.5 py-1.5 rounded-lg text-xs font-bold text-on-surface-variant hover:text-on-surface bg-surface-container-high/60 hover:bg-surface-container-high flex items-center gap-1 cursor-pointer"
+                >
+                  <span className="material-symbols-outlined text-[15px]">edit</span>
+                  <span>{t.editProfileBtn || 'Edit Input'}</span>
+                </button>
+              </div>
             </div>
 
             {/* Editable Extracted Fields Grid */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 p-4 rounded-2xl bg-surface-container-low border border-outline-variant/20">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5 p-3.5 rounded-xl bg-surface-container-low border border-outline-variant/20">
               {/* Full Name */}
               <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-bold text-on-surface-variant uppercase font-mono">
-                  {t.extractedName}
+                <label className="text-[10px] font-bold text-on-surface-variant uppercase font-mono">
+                  {t.extractedName || 'Full Name'}
                 </label>
                 <input
                   type="text"
                   value={draftProfile.fullName}
                   onChange={(e) => setDraftProfile((p) => ({ ...p, fullName: e.target.value }))}
                   placeholder="Enter full name"
-                  className="h-10 px-3 rounded-xl bg-surface-container-lowest text-on-surface text-sm font-semibold border border-outline-variant/30 focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="h-9 px-3 rounded-lg bg-surface-container-lowest text-on-surface text-xs font-semibold border border-outline-variant/30 focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
 
               {/* Age */}
               <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-bold text-on-surface-variant uppercase font-mono">
-                  {t.extractedAge}
+                <label className="text-[10px] font-bold text-on-surface-variant uppercase font-mono">
+                  {t.extractedAge || 'Age'}
                 </label>
                 <input
                   type="number"
@@ -1232,54 +1161,54 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
                   max="105"
                   value={draftProfile.age}
                   onChange={(e) => setDraftProfile((p) => ({ ...p, age: Number(e.target.value) }))}
-                  className="h-10 px-3 rounded-xl bg-surface-container-lowest text-on-surface text-sm font-semibold border border-outline-variant/30 focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="h-9 px-3 rounded-lg bg-surface-container-lowest text-on-surface text-xs font-semibold border border-outline-variant/30 focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
 
               {/* Occupation */}
               <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-bold text-on-surface-variant uppercase font-mono">
-                  {t.extractedOccupation}
+                <label className="text-[10px] font-bold text-on-surface-variant uppercase font-mono">
+                  {t.extractedOccupation || 'Occupation'}
                 </label>
                 <select
                   value={draftProfile.occupation}
                   onChange={(e) => setDraftProfile((p) => ({ ...p, occupation: e.target.value }))}
-                  className="h-10 px-3 rounded-xl bg-surface-container-lowest text-on-surface text-sm font-semibold border border-outline-variant/30 focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="h-9 px-2.5 rounded-lg bg-surface-container-lowest text-on-surface text-xs font-semibold border border-outline-variant/30 focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
                 >
-                  <option value="Farmer / Agriculture">{t.farmerOcc}</option>
-                  <option value="Student">{t.studentOcc}</option>
-                  <option value="Daily Wage / Construction Worker">{t.workerOcc}</option>
-                  <option value="Self-employed / Artisan">{t.artisanOcc}</option>
-                  <option value="Homemaker / Women">{t.homemakerOcc}</option>
-                  <option value="Unemployed">{t.unemployedOcc}</option>
+                  <option value="Farmer / Agriculture">{t.farmerOcc || 'Farmer / Agriculture'}</option>
+                  <option value="Student">{t.studentOcc || 'Student'}</option>
+                  <option value="Daily Wage / Construction Worker">{t.workerOcc || 'Daily Wage Worker'}</option>
+                  <option value="Self-employed / Artisan">{t.artisanOcc || 'Artisan / Self-employed'}</option>
+                  <option value="Homemaker / Women">{t.homemakerOcc || 'Homemaker / Women'}</option>
+                  <option value="Unemployed">{t.unemployedOcc || 'Unemployed'}</option>
                 </select>
               </div>
 
               {/* State & District */}
               <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-bold text-on-surface-variant uppercase font-mono">
-                  {t.extractedState} & {t.extractedDistrict}
+                <label className="text-[10px] font-bold text-on-surface-variant uppercase font-mono">
+                  {t.extractedState || 'State'} & {t.extractedDistrict || 'District'}
                 </label>
                 <div className="grid grid-cols-2 gap-1.5">
                   <input
                     type="text"
                     value={draftProfile.state}
                     onChange={(e) => setDraftProfile((p) => ({ ...p, state: e.target.value }))}
-                    className="h-10 px-2.5 rounded-xl bg-surface-container-lowest text-on-surface text-xs font-semibold border border-outline-variant/30"
+                    className="h-9 px-2 rounded-lg bg-surface-container-lowest text-on-surface text-xs font-semibold border border-outline-variant/30"
                   />
                   <input
                     type="text"
                     value={draftProfile.district}
                     onChange={(e) => setDraftProfile((p) => ({ ...p, district: e.target.value }))}
-                    className="h-10 px-2.5 rounded-xl bg-surface-container-lowest text-on-surface text-xs font-semibold border border-outline-variant/30"
+                    className="h-9 px-2 rounded-lg bg-surface-container-lowest text-on-surface text-xs font-semibold border border-outline-variant/30"
                   />
                 </div>
               </div>
 
               {/* Land Holding Acres */}
               <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-bold text-on-surface-variant uppercase font-mono">
-                  {t.extractedLand} ({t.acresUnit})
+                <label className="text-[10px] font-bold text-on-surface-variant uppercase font-mono">
+                  {t.extractedLand || 'Land Holding'} ({t.acresUnit || 'acres'})
                 </label>
                 <input
                   type="number"
@@ -1288,14 +1217,14 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
                   max="1000"
                   value={draftProfile.landHoldingAcres ?? 0}
                   onChange={(e) => setDraftProfile((p) => ({ ...p, landHoldingAcres: e.target.value === '' ? 0 : parseFloat(e.target.value) || 0 }))}
-                  className="h-10 px-3 rounded-xl bg-surface-container-lowest text-on-surface text-sm font-semibold border border-outline-variant/30 focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="h-9 px-3 rounded-lg bg-surface-container-lowest text-on-surface text-xs font-semibold border border-outline-variant/30 focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
 
               {/* Annual Income */}
               <div className="flex flex-col gap-1">
-                <label className="text-[11px] font-bold text-on-surface-variant uppercase font-mono">
-                  {t.extractedIncome} (₹)
+                <label className="text-[10px] font-bold text-on-surface-variant uppercase font-mono">
+                  {t.extractedIncome || 'Annual Income'} (₹)
                 </label>
                 <input
                   type="number"
@@ -1304,38 +1233,41 @@ export const VoiceAssistantModal: React.FC<VoiceAssistantModalProps> = ({
                   max="2500000"
                   value={draftProfile.annualIncome}
                   onChange={(e) => setDraftProfile((p) => ({ ...p, annualIncome: Number(e.target.value) }))}
-                  className="h-10 px-3 rounded-xl bg-surface-container-lowest text-on-surface text-sm font-semibold border border-outline-variant/30 focus:outline-none focus:ring-2 focus:ring-primary"
+                  className="h-9 px-3 rounded-lg bg-surface-container-lowest text-on-surface text-xs font-semibold border border-outline-variant/30 focus:outline-none focus:ring-1 focus:ring-primary"
                 />
               </div>
             </div>
 
-            {/* Action Buttons: Confirm vs Confirm & Check Eligibility */}
-            <div className="flex flex-wrap items-center justify-between gap-3 pt-2">
+            {/* Action Buttons */}
+            <div className="flex flex-wrap items-center justify-between gap-2.5 pt-1">
               <button
                 type="button"
-                onClick={() => setStage('input')}
-                className="px-4 py-2.5 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
+                onClick={() => {
+                  stopSpeakingAudio();
+                  setStage('input');
+                }}
+                className="px-3.5 py-2 rounded-xl bg-surface-container hover:bg-surface-container-high text-on-surface text-xs font-bold transition-all flex items-center gap-1 cursor-pointer"
               >
-                <span className="material-symbols-outlined text-[16px]">arrow_back</span>
-                <span>{t.backToPrevious}</span>
+                <span className="material-symbols-outlined text-[15px]">arrow_back</span>
+                <span>{t.backToPrevious || 'Back'}</span>
               </button>
 
               <div className="flex items-center gap-2">
                 <button
                   type="button"
                   onClick={() => handleConfirm(false)}
-                  className="px-4 py-2.5 rounded-xl bg-surface-container-highest hover:bg-surface-container text-on-surface text-xs font-bold border border-outline-variant/30 transition-all cursor-pointer"
+                  className="px-3.5 py-2 rounded-xl bg-surface-container-highest hover:bg-surface-container text-on-surface text-xs font-bold border border-outline-variant/30 transition-all cursor-pointer"
                 >
-                  <span>{t.userConfirms}</span>
+                  <span>{t.userConfirms || 'Save to Profile'}</span>
                 </button>
 
                 <button
                   type="button"
                   onClick={() => handleConfirm(true)}
-                  className="px-6 py-2.5 rounded-xl bg-primary text-on-primary text-xs sm:text-sm font-bold shadow-lg shadow-primary/20 hover:bg-primary-container transition-all flex items-center gap-2 cursor-pointer"
+                  className="px-5 py-2 rounded-xl bg-primary text-on-primary text-xs font-bold shadow-md hover:bg-primary-container transition-all flex items-center gap-1.5 cursor-pointer"
                 >
-                  <span className="material-symbols-outlined text-[18px]">verified</span>
-                  <span>{t.confirmAndCheck}</span>
+                  <span className="material-symbols-outlined text-[16px]">verified</span>
+                  <span>{t.confirmAndCheck || 'Confirm & Check Eligibility'}</span>
                 </button>
               </div>
             </div>
