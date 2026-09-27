@@ -1,0 +1,8 @@
+{
+  "name": "Remix Remix Remix Remix Remix Remix SchemeSaathi",
+  "description": "Civic-AI initiative for multi-agent government scheme discovery, voice-first citizen intake, and dynamic runtime resource reservation topology.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
