@@ -3,6 +3,7 @@ import { SCHEMESAATHI_LOGO_URL } from '../data/mockData';
 import { Language } from '../types';
 import { useLanguage, ALL_SUPPORTED_LANGUAGES } from '../i18n/LanguageContext';
 import { getRAGTranslation } from '../i18n/ragTranslations';
+import { useAuth } from '../context/AuthContext';
 
 interface NavbarProps {
   currentView: string;
@@ -20,26 +21,32 @@ export const Navbar: React.FC<NavbarProps> = ({
   onToggleSimpleMode,
   onOpenVoice,
 }) => {
+  const { user, isAuthenticated, logout } = useAuth();
   const { language, setLanguage, t } = useLanguage();
   const [langMenuOpen, setLangMenuOpen] = useState(false);
   const [langSearch, setLangSearch] = useState('');
+  const [userMenuOpen, setUserMenuOpen] = useState(false);
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const langDropdownRef = useRef<HTMLDivElement>(null);
+  const userDropdownRef = useRef<HTMLDivElement>(null);
 
-  // Close dropdown on click outside
+  // Close dropdowns on click outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
       if (langDropdownRef.current && !langDropdownRef.current.contains(event.target as Node)) {
         setLangMenuOpen(false);
       }
+      if (userDropdownRef.current && !userDropdownRef.current.contains(event.target as Node)) {
+        setUserMenuOpen(false);
+      }
     };
-    if (langMenuOpen) {
+    if (langMenuOpen || userMenuOpen) {
       document.addEventListener('mousedown', handleClickOutside);
     }
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
     };
-  }, [langMenuOpen]);
+  }, [langMenuOpen, userMenuOpen]);
 
   const currentLangObj = useMemo(
     () => ALL_SUPPORTED_LANGUAGES.find((l) => l.code === language) || ALL_SUPPORTED_LANGUAGES[0],
@@ -259,6 +266,80 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="hidden sm:inline">{t.voiceAssistant}</span>
           </button>
 
+          {/* Authentication Status / Login Button */}
+          {isAuthenticated && user ? (
+            <div className="relative" ref={userDropdownRef}>
+              <button
+                type="button"
+                onClick={() => setUserMenuOpen(!userMenuOpen)}
+                className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-surface-container-highest text-primary hover:bg-surface-container transition-colors text-xs font-semibold shadow-xs border border-outline-variant/30 cursor-pointer"
+                title={user.fullName || 'Citizen Profile'}
+                aria-expanded={userMenuOpen}
+              >
+                <span className="w-5 h-5 rounded-full bg-primary text-on-primary text-[10px] font-bold flex items-center justify-center">
+                  {user.fullName ? user.fullName.charAt(0).toUpperCase() : 'C'}
+                </span>
+                <span className="hidden md:inline max-w-[110px] truncate font-bold">
+                  {user.fullName.split(' ')[0]}
+                </span>
+                <span className="material-symbols-outlined text-[14px] text-on-surface-variant">
+                  {userMenuOpen ? 'expand_less' : 'expand_more'}
+                </span>
+              </button>
+
+              {userMenuOpen && (
+                <div className="absolute right-0 mt-1.5 w-60 rounded-2xl bg-surface-container-lowest shadow-2xl border border-outline-variant/30 p-2 z-50 animate-fade-in flex flex-col gap-1">
+                  <div className="px-3 py-2.5 border-b border-outline-variant/20 flex flex-col">
+                    <span className="text-xs font-bold text-on-surface truncate">{user.fullName}</span>
+                    <span className="text-[11px] text-on-surface-variant font-mono truncate">{user.emailOrPhone}</span>
+                    <span className="mt-1 text-[10px] font-mono text-primary bg-primary-fixed/30 px-1.5 py-0.5 rounded w-fit">
+                      Aadhaar DBT Synced
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      onNavigate('home');
+                    }}
+                    className="w-full px-3 py-2 text-left text-xs text-on-surface hover:bg-surface-container-low rounded-xl flex items-center gap-2 cursor-pointer font-medium"
+                  >
+                    <span className="material-symbols-outlined text-[16px] text-primary">person</span>
+                    <span>Citizen Dashboard</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setUserMenuOpen(false);
+                      logout();
+                      onNavigate('login');
+                    }}
+                    className="w-full px-3 py-2 text-left text-xs text-error hover:bg-error-container/20 rounded-xl flex items-center gap-2 cursor-pointer font-bold"
+                  >
+                    <span className="material-symbols-outlined text-[16px]">logout</span>
+                    <span>Log Out</span>
+                  </button>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={() => onNavigate('login')}
+                className={`inline-flex items-center gap-1 px-2.5 sm:px-3 py-1.5 rounded-lg text-xs font-bold shadow-xs transition-colors cursor-pointer border ${
+                  currentView === 'login'
+                    ? 'bg-primary text-on-primary border-primary'
+                    : 'bg-surface-container-low text-primary hover:bg-surface-container border-outline-variant/30'
+                }`}
+                title="Log In to SchemeSaathi"
+              >
+                <span className="material-symbols-outlined text-[16px]">login</span>
+                <span>Log In</span>
+              </button>
+            </div>
+          )}
+
           {/* Mobile Hamburger Menu Toggle */}
           <button
             type="button"
@@ -275,42 +356,175 @@ export const Navbar: React.FC<NavbarProps> = ({
 
       {/* Mobile Drawer Menu */}
       {mobileMenuOpen && (
-        <div className="lg:hidden bg-surface-container-lowest border-t border-outline-variant/20 px-4 py-3 space-y-1.5 shadow-lg">
-          {navLinks.map((link) => (
+        <div className="lg:hidden bg-surface-container-lowest border-t border-outline-variant/20 px-4 py-3 space-y-2 shadow-xl max-h-[85vh] overflow-y-auto animate-fade-in">
+          {/* User profile card or login prompt */}
+          {isAuthenticated && user ? (
+            <div className="p-3 rounded-xl bg-surface-container-low border border-outline-variant/30 flex items-center justify-between">
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="w-8 h-8 rounded-full bg-primary text-on-primary text-xs font-bold flex items-center justify-center flex-shrink-0">
+                  {user.fullName ? user.fullName.charAt(0).toUpperCase() : 'C'}
+                </span>
+                <div className="min-w-0 flex flex-col">
+                  <span className="text-xs font-bold text-on-surface truncate">{user.fullName}</span>
+                  <span className="text-[10px] text-on-surface-variant font-mono truncate">{user.emailOrPhone}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => {
+                  logout();
+                  setMobileMenuOpen(false);
+                  onNavigate('login');
+                }}
+                className="px-2.5 py-1 text-xs text-error font-bold rounded-lg hover:bg-error-container/20 cursor-pointer"
+              >
+                Logout
+              </button>
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2 pb-1">
+              <button
+                type="button"
+                onClick={() => {
+                  onNavigate('login');
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full py-2 rounded-lg bg-primary text-on-primary text-xs font-bold flex items-center justify-center gap-1.5 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[16px]">login</span>
+                <span>Log In</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  onNavigate('signup');
+                  setMobileMenuOpen(false);
+                }}
+                className="w-full py-2 rounded-lg bg-surface-container text-primary text-xs font-bold flex items-center justify-center gap-1.5 border border-outline-variant/30 cursor-pointer"
+              >
+                <span className="material-symbols-outlined text-[16px]">person_add</span>
+                <span>Sign Up</span>
+              </button>
+            </div>
+          )}
+
+          {/* 1. Home */}
+          <button
+            type="button"
+            onClick={() => {
+              onNavigate('home');
+              setMobileMenuOpen(false);
+            }}
+            className={`w-full px-3 py-2 rounded-lg text-left text-xs font-bold flex items-center gap-2 cursor-pointer ${
+              currentView === 'home' ? 'bg-primary text-on-primary' : 'text-on-surface hover:bg-surface-container-low'
+            }`}
+          >
+            <span className="material-symbols-outlined text-[18px]">home</span>
+            <span>Home</span>
+          </button>
+
+          {/* 2. Find Schemes */}
+          <div className="p-2 rounded-xl bg-surface-container-low/60 space-y-1">
+            <span className="text-[10px] font-mono uppercase text-primary font-bold px-1 block">
+              Find Schemes
+            </span>
             <button
-              key={link.id}
+              type="button"
               onClick={() => {
-                onNavigate(link.id);
+                onNavigate('rag-finder');
                 setMobileMenuOpen(false);
               }}
-              className={`w-full px-3 py-2 rounded-lg text-left text-xs sm:text-sm flex items-center justify-between cursor-pointer ${
-                currentView === link.id
-                  ? 'bg-primary-container text-on-primary-container font-semibold'
-                  : 'text-on-surface hover:bg-surface-container-low'
-              }`}
+              className="w-full px-2 py-1.5 rounded-lg text-left text-xs text-on-surface hover:bg-surface-container flex items-center gap-2 cursor-pointer"
             >
-              <div className="flex items-center gap-2">
-                {link.icon && <span className="material-symbols-outlined text-[16px]">{link.icon}</span>}
-                <span>{link.label}</span>
-                {link.badge && (
-                  <span className="text-[10px] font-mono px-1.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-800 dark:text-emerald-300 font-bold">
-                    {link.badge}
-                  </span>
-                )}
-              </div>
-              <span className="material-symbols-outlined text-[16px] text-outline">chevron_right</span>
+              <span className="material-symbols-outlined text-[16px] text-primary">search</span>
+              <span>Search Schemes (Gemini RAG)</span>
             </button>
-          ))}
-          <div className="pt-2 border-t border-outline-variant/20 flex gap-2">
             <button
+              type="button"
+              onClick={() => {
+                onNavigate('home');
+                setMobileMenuOpen(false);
+                setTimeout(() => {
+                  document.getElementById('quick-discovery')?.scrollIntoView({ behavior: 'smooth' });
+                }, 150);
+              }}
+              className="w-full px-2 py-1.5 rounded-lg text-left text-xs text-on-surface hover:bg-surface-container flex items-center gap-2 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[16px] text-primary">how_to_reg</span>
+              <span>Check Eligibility</span>
+            </button>
+          </div>
+
+          {/* 3. AI Assistant */}
+          <div className="p-2 rounded-xl bg-surface-container-low/60 space-y-1">
+            <span className="text-[10px] font-mono uppercase text-secondary font-bold px-1 block">
+              AI Assistant
+            </span>
+            <button
+              type="button"
               onClick={() => {
                 onOpenVoice();
                 setMobileMenuOpen(false);
               }}
-              className="w-full py-2 rounded-lg bg-primary text-on-primary text-xs font-semibold flex items-center justify-center gap-1.5 cursor-pointer"
+              className="w-full px-2 py-1.5 rounded-lg text-left text-xs text-on-surface hover:bg-surface-container flex items-center gap-2 cursor-pointer"
             >
-              <span className="material-symbols-outlined text-[16px]">mic</span>
-              <span>{t.voiceAssistant}</span>
+              <span className="material-symbols-outlined text-[16px] text-secondary">mic</span>
+              <span>Voice Assistant (22 Languages)</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onNavigate('rag-finder');
+                setMobileMenuOpen(false);
+              }}
+              className="w-full px-2 py-1.5 rounded-lg text-left text-xs text-on-surface hover:bg-surface-container flex items-center gap-2 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[16px] text-secondary">chat</span>
+              <span>Ask SchemeSaathi</span>
+            </button>
+          </div>
+
+          {/* 4. Resources */}
+          <div className="p-2 rounded-xl bg-surface-container-low/60 space-y-1">
+            <span className="text-[10px] font-mono uppercase text-on-surface-variant font-bold px-1 block">
+              Resources
+            </span>
+            <button
+              type="button"
+              onClick={() => {
+                onNavigate('how-it-works');
+                setMobileMenuOpen(false);
+              }}
+              className="w-full px-2 py-1.5 rounded-lg text-left text-xs text-on-surface hover:bg-surface-container flex items-center gap-2 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[16px]">help_outline</span>
+              <span>How It Works</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                onNavigate('runtime-control-center');
+                setMobileMenuOpen(false);
+              }}
+              className="w-full px-2 py-1.5 rounded-lg text-left text-xs text-on-surface hover:bg-surface-container flex items-center gap-2 cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[16px]">account_tree</span>
+              <span>A3 Runtime Live Demo</span>
+            </button>
+          </div>
+
+          {/* Quick Voice Bar */}
+          <div className="pt-1 border-t border-outline-variant/20">
+            <button
+              type="button"
+              onClick={() => {
+                onOpenVoice();
+                setMobileMenuOpen(false);
+              }}
+              className="w-full py-2.5 rounded-xl bg-primary text-on-primary text-xs font-bold flex items-center justify-center gap-2 shadow-xs cursor-pointer"
+            >
+              <span className="material-symbols-outlined text-[18px]">mic</span>
+              <span>Speak to Voice Assistant</span>
             </button>
           </div>
         </div>

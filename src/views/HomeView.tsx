@@ -317,36 +317,6 @@ export const HomeView: React.FC<HomeViewProps> = ({
         <section className="w-full px-4 sm:px-6 lg:px-8 py-3 sm:py-4" id="quick-discovery" ref={formSectionRef}>
           <div className="mx-auto max-w-5xl">
             <div className="rounded-2xl bg-surface-container-lowest p-3.5 sm:p-5 shadow-sm border border-outline-variant/30">
-              {/* RAG Knowledge Base Callout Banner */}
-              <div className="mb-3 bg-gradient-to-r from-emerald-500/10 via-teal-500/10 to-primary/10 border border-emerald-500/30 p-2.5 sm:p-3 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-2.5">
-                <div className="flex items-center gap-2">
-                  <div className="h-8 w-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center flex-shrink-0 shadow-xs">
-                    <span className="material-symbols-outlined text-[18px]">manage_search</span>
-                  </div>
-                  <div>
-                    <div className="flex items-center gap-1.5">
-                      <span className="font-bold text-xs sm:text-sm text-on-surface">
-                        {ragT.ragBannerTitle}
-                      </span>
-                      <span className="px-1.5 py-0.2 rounded-full bg-emerald-500/20 text-emerald-800 dark:text-emerald-300 font-mono text-[9px] font-bold">
-                        schemes_clean.csv
-                      </span>
-                    </div>
-                    <p className="text-[11px] text-on-surface-variant mt-0.5">
-                      {ragT.ragBannerSubtitle}
-                    </p>
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => onNavigate('rag-finder')}
-                  className="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-xs transition flex items-center justify-center gap-1 cursor-pointer flex-shrink-0"
-                >
-                  <span>{ragT.launchRagFinder}</span>
-                  <span className="material-symbols-outlined text-[13px]">arrow_forward</span>
-                </button>
-              </div>
-
               {/* Section Title Header */}
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 mb-3 bg-surface-container-low/50 p-2.5 sm:p-3 rounded-xl border border-outline-variant/20">
                 <div>
